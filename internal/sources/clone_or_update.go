@@ -19,7 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	configsv1alpha1 "github.com/joe-bresee/config-synchronizer-operator/api/v1alpha1"
+	configsv1alpha1 "github.com/joe-bresee/gitsync/api/v1alpha1"
 )
 
 func cloneOrUpdate(

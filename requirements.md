@@ -98,7 +98,7 @@ The current CR design is flexible and supports the core use cases:
 
 ## Directory Structure
 
-config-synchronizer-operator/
+gitsync/
 README.md
 requirements.md
 outline.md

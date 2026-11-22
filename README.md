@@ -1,7 +1,4 @@
-# Config-Synchronizer-Operator
-
-<img width="1536" height="1024" alt="ChatGPT Image Dec 4, 2025, 11_41_10 AM" src="https://github.com/user-attachments/assets/e5b584dd-c8f3-4b0b-9c84-4b2b51d45f7a" />
-
+# gitsync
 
 A Kubernetes operator that synchronizes configuration from a Git source into target resources on a cluster.
 
@@ -23,11 +20,6 @@ MVP notes
  - This operator currently applies raw manifests from the configured source directly to the cluster.
  - Templating/rendering (Helm/Kustomize/text templates) is intentionally deferred for the MVP. See `todo.md` or `requirements.md` for planned templating work.
  - Runtime validation: the operator performs a server-side dry-run before applying manifests to catch admission/validation errors. This behavior can be disabled for tests.
-- Understand reconciliation loops and GitOps workflows  
-- learn how to use kubeapi and strengthen my understanding of neceessary rbacs and kubernetes interactions
-- learn how to do go authentication via https and ssh
-- going to learn how to support ca cert checking
-- learn how to think about deployment lifecycles, gitops methodologies, environemtns/cluster/multi-tenancy
 
 ## Features
 
@@ -80,12 +72,12 @@ Ensure you have the following tools installed:
 
 1. **Create a Kind cluster:**
 ```bash
-kind create cluster --name config-sync
+kind create cluster --name gitsync
 ```
 
 2. **Install CRDs and deploy the operator:**
 ```bash
-# Install the ConfigSync CRD
+# Install the gitsync CRD
 make install
 
 # Run the controller locally (recommended for development)

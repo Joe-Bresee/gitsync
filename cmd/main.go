@@ -35,8 +35,8 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	configsv1alpha1 "github.com/joe-bresee/config-synchronizer-operator/api/v1alpha1"
-	"github.com/joe-bresee/config-synchronizer-operator/internal/controller"
+	configsv1alpha1 "github.com/joe-bresee/gitsync/api/v1alpha1"
+	"github.com/joe-bresee/gitsync/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
 

@@ -27,9 +27,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	configsv1alpha1 "github.com/joe-bresee/config-synchronizer-operator/api/v1alpha1"
-	apply "github.com/joe-bresee/config-synchronizer-operator/internal/apply"
-	source "github.com/joe-bresee/config-synchronizer-operator/internal/sources"
+	configsv1alpha1 "github.com/joe-bresee/gitsync/api/v1alpha1"
+	apply "github.com/joe-bresee/gitsync/internal/apply"
+	source "github.com/joe-bresee/gitsync/internal/sources"
 )
 
 // ConfigSyncReconciler reconciles a ConfigSync object

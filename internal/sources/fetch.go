@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	configsv1alpha1 "github.com/joe-bresee/config-synchronizer-operator/api/v1alpha1"
+	configsv1alpha1 "github.com/joe-bresee/gitsync/api/v1alpha1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 

@@ -6,8 +6,8 @@ cliVersion: 4.10.1
 domain: example.io
 layout:
 - go.kubebuilder.io/v4
-projectName: config-synchronizer-operator
-repo: github.com/joe-bresee/config-synchronizer-operator
+projectName: gitsync
+repo: github.com/joe-bresee/gitsync
 resources:
 - api:
     crdVersion: v1
@@ -16,6 +16,6 @@ resources:
   domain: example.io
   group: configs
   kind: ConfigSync
-  path: github.com/joe-bresee/config-synchronizer-operator/api/v1alpha1
+  path: github.com/joe-bresee/gitsync/api/v1alpha1
   version: v1alpha1
 version: "3"

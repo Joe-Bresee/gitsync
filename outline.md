@@ -1,7 +1,7 @@
 📘 README — Config Synchronizer Operator
 Overview
 
-Config Synchronizer Operator is a Kubernetes Operator that automatically synchronizes configuration data from a Git repository into target Kubernetes resources across namespaces or clusters.
+gitsync is a Kubernetes Operator that automatically synchronizes configuration data from a Git repository into target Kubernetes resources across namespaces or clusters.
 Its purpose is to provide lightweight, domain-specific configuration management without requiring a full GitOps stack.
 
 This operator watches ConfigSync custom resources (CRs), pulls configuration from a Git repository, transforms it if needed, and applies it to target Kubernetes resources.
@@ -214,7 +214,7 @@ Minimal API calls
 Efficient Git interactions
 
 🧩 Project Structure (Recommended)
-/config-synchronizer-operator
+/gitsync
   /api                   -> CRD schema + Go types or Python models
   /controllers           -> reconciliation logic
   /internal              -> git client, parser, transformer

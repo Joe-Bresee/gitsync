@@ -1,4 +1,4 @@
-module github.com/joe-bresee/config-synchronizer-operator
+module github.com/joe-bresee/gitsync
 
 go 1.24.6
 
