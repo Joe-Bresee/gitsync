@@ -14,23 +14,19 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// DryRunEnabled controls whether ApplyTarget performs a server-side dry-run
-var DryRunEnabled = false
+// DryRunEnabled controls whether ApplyTarget validates each manifest with a
+// server-side dry-run before applying it.
+var DryRunEnabled = true
 
 func ApplyTarget(ctx context.Context, c client.Client, sourcePath string, target configsv1alpha1.TargetRef) error {
 	logger := log.FromContext(ctx)
 
-	files, err := os.ReadDir(sourcePath)
+	files, err := manifestFiles(sourcePath)
 	if err != nil {
-		return fmt.Errorf("failed to list source directory: %w", err)
+		return err
 	}
 
-	for _, file := range files {
-		if file.IsDir() || !(strings.HasSuffix(file.Name(), ".yaml") || strings.HasSuffix(file.Name(), ".yml")) {
-			continue
-		}
-
-		filePath := filepath.Join(sourcePath, file.Name())
+	for _, filePath := range files {
 		data, err := os.ReadFile(filePath)
 		if err != nil {
 			return fmt.Errorf("failed to read file %s: %w", filePath, err)
@@ -64,19 +60,17 @@ func ApplyTarget(ctx context.Context, c client.Client, sourcePath string, target
 
 			applyOpts := []client.PatchOption{client.ForceOwnership, client.FieldOwner("configsync")}
 
-			logger.Info("dryrun status", "enabled", DryRunEnabled)
-
 			if DryRunEnabled {
-				logger.Info("Performing dry-run apply")
+				logger.Info("Performing server-side dry-run")
 				if err := c.Patch(ctx, obj, client.Apply, append(applyOpts, client.DryRunAll)...); err != nil {
 					return fmt.Errorf("dry-run failed for %s from %s: %w",
 						obj.GetKind(), filePath, err)
 				}
-			} else {
-				if err := c.Patch(ctx, obj, client.Apply, applyOpts...); err != nil {
-					return fmt.Errorf("failed to apply %s from %s: %w",
-						obj.GetKind(), filePath, err)
-				}
+			}
+
+			if err := c.Patch(ctx, obj, client.Apply, applyOpts...); err != nil {
+				return fmt.Errorf("failed to apply %s from %s: %w",
+					obj.GetKind(), filePath, err)
 			}
 
 			logger.Info("Applied manifest",
@@ -89,6 +83,34 @@ func ApplyTarget(ctx context.Context, c client.Client, sourcePath string, target
 	}
 
 	return nil
+}
+
+func manifestFiles(sourcePath string) ([]string, error) {
+	info, err := os.Stat(sourcePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to access source path %s: %w", sourcePath, err)
+	}
+
+	if !info.IsDir() {
+		return []string{sourcePath}, nil
+	}
+
+	entries, err := os.ReadDir(sourcePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list source directory %s: %w", sourcePath, err)
+	}
+
+	files := make([]string, 0)
+	for _, entry := range entries {
+		if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		name := entry.Name()
+		if strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml") {
+			files = append(files, filepath.Join(sourcePath, name))
+		}
+	}
+	return files, nil
 }
 
 // cleanObjectForApply removes all server-populated metadata fields to avoid managedFields errors

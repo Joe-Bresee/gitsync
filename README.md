@@ -18,8 +18,8 @@ This project allows me to:
  
 MVP notes
  - This operator currently applies raw manifests from the configured source directly to the cluster.
- - Templating/rendering (Helm/Kustomize/text templates) is intentionally deferred for the MVP. See `todo.md` or `requirements.md` for planned templating work.
- - Runtime validation: the operator performs a server-side dry-run before applying manifests to catch admission/validation errors. This behavior can be disabled for tests.
+ - Templating/rendering (Helm/Kustomize/text templates) is intentionally deferred for the MVP. See `.agents/todo.md` for planned templating work.
+ - Runtime validation: the operator performs a server-side dry-run before applying manifests to catch admission/validation errors. Tests can disable this behavior by setting `apply.DryRunEnabled = false`.
 
 ## Features
 
@@ -87,12 +87,20 @@ make run
 **OR** build and deploy as container:
 
 ```bash
-# Build controller image and load into Kind cluster
-make docker-build IMG=controller:latest
-kind load docker-image controller:latest --name config-sync
+# Create/load/build/install/deploy in one idempotent command
+make deploy-kind IMG=controller:latest KIND_LOAD_CLUSTER=gitsync
+```
 
-# Deploy the controller
-make deploy IMG=controller:latest
+Remove the operator and CRDs while keeping the Kind cluster:
+
+```bash
+make undeploy-kind KIND_LOAD_CLUSTER=gitsync
+```
+
+Remove the operator and then delete the entire Kind cluster:
+
+```bash
+make undeploy-kind KIND_LOAD_CLUSTER=gitsync KIND_DELETE_CLUSTER=true
 ```
 
 3. **Test with a sample ConfigSync:**
