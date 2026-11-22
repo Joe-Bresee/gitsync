@@ -17,7 +17,16 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Running Tests
+      - name: Verify dependencies
         run: |
           go mod tidy
-          make test
+          git diff --exit-code -- go.mod go.sum
+
+      - name: Verify generated files
+        run: make verify-generated
+
+      - name: Install envtest assets
+        run: make setup-envtest
+
+      - name: Running Tests
+        run: make test
