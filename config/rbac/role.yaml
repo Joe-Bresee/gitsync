@@ -7,8 +7,20 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - namespaces
+  - configmaps
   - secrets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
   verbs:
   - get
   - list

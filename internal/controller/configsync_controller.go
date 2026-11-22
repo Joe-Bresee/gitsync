@@ -18,14 +18,22 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"reflect"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	configsv1alpha1 "github.com/joe-bresee/gitsync/api/v1alpha1"
 	apply "github.com/joe-bresee/gitsync/internal/apply"
@@ -42,7 +50,7 @@ type ConfigSyncReconciler struct {
 // +kubebuilder:rbac:groups=configs.example.io,resources=configsyncs/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=configs.example.io,resources=configsyncs/finalizers,verbs=update
 
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=configmaps;secrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
 
@@ -63,15 +71,26 @@ func (r *ConfigSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if err := r.Get(ctx, req.NamespacedName, &configSync); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+	previousStatus := configSync.DeepCopy().Status
 
 	// --------------------------------------------------------------
 	// Step 1: Fetch source and determine revision
 	// --------------------------------------------------------------
-	revisionSHA, sourcePath, commitMsg, err := source.FetchSource(&configSync, ctx, r.Client)
+	revisionSHA, sourcePath, checkoutPath, commitMsg, err := source.FetchSource(&configSync, ctx, r.Client)
 	if err != nil {
 		setCondition(&configSync.Status, "Degraded", metav1.ConditionTrue, "SourceFetchFailed", err.Error())
-		_ = r.Status().Update(ctx, &configSync)
-		return ctrl.Result{}, err
+		if err := r.updateStatusIfChanged(ctx, &configSync, previousStatus); err != nil {
+			return ctrl.Result{}, err
+		}
+		requeueAfter, requeueErr := reconcileInterval(configSync.Spec.RefreshInterval)
+		if requeueErr != nil {
+			setCondition(&configSync.Status, "Degraded", metav1.ConditionTrue, "InvalidRefreshInterval", requeueErr.Error())
+			if err := r.updateStatusIfChanged(ctx, &configSync, previousStatus); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
 
 	// Log the fetched commit message (if any)
@@ -81,59 +100,57 @@ func (r *ConfigSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		log.Info("fetched source", "commit", revisionSHA)
 	}
 
-	// Cleanup temp directories if not Git
-	if configSync.Spec.Source.Git == nil && sourcePath != "" {
-		defer os.RemoveAll(sourcePath)
+	if checkoutPath != "" {
+		defer os.RemoveAll(checkoutPath)
 	}
 
 	// --------------------------------------------------------------
-	// Step 2: Determine if we need to apply
+	// Step 2: Apply desired state
 	// --------------------------------------------------------------
-	previousRevision := configSync.Status.SourceRevision
-	shouldApply := previousRevision != revisionSHA
-
-	if shouldApply {
-		log.Info("Source revision changed — applying", "old", previousRevision, "new", revisionSHA)
-
-		// Apply to all targets
-		for _, target := range configSync.Spec.Targets {
-			if err := apply.ApplyTarget(ctx, r.Client, sourcePath, target); err != nil {
-				setCondition(&configSync.Status, "Degraded", metav1.ConditionTrue, "ApplyFailed", err.Error())
-				_ = r.Status().Update(ctx, &configSync)
+	// Always apply so periodic reconciliation repairs out-of-band edits and
+	// restores targets that were deleted without a source revision change.
+	log.Info("Applying desired state", "revision", revisionSHA)
+	for _, target := range configSync.Spec.Targets {
+		if err := apply.ApplyTarget(ctx, r.Client, sourcePath, target); err != nil {
+			setCondition(&configSync.Status, "Degraded", metav1.ConditionTrue, "ApplyFailed", err.Error())
+			if err := r.updateStatusIfChanged(ctx, &configSync, previousStatus); err != nil {
 				return ctrl.Result{}, err
 			}
+			requeueAfter, requeueErr := reconcileInterval(configSync.Spec.RefreshInterval)
+			if requeueErr != nil {
+				setCondition(&configSync.Status, "Degraded", metav1.ConditionTrue, "InvalidRefreshInterval", requeueErr.Error())
+				if err := r.updateStatusIfChanged(ctx, &configSync, previousStatus); err != nil {
+					return ctrl.Result{}, err
+				}
+				return ctrl.Result{}, nil
+			}
+			return ctrl.Result{RequeueAfter: requeueAfter}, nil
 		}
-
-		// Apply succeeded — mark condition
-		setCondition(&configSync.Status, "Degraded", metav1.ConditionFalse, "ApplySucceeded", "All targets applied successfully")
-	} else {
-		log.Info("No changes detected — skipping apply", "revision", revisionSHA)
 	}
+	setCondition(&configSync.Status, "Degraded", metav1.ConditionFalse, "ApplySucceeded", "All targets applied successfully")
 
 	// --------------------------------------------------------------
-	// Step 3: Always update status AFTER apply decision
+	// Step 3: Update status after apply
 	// --------------------------------------------------------------
 	configSync.Status.LastSyncedTime = &metav1.Time{Time: time.Now()}
 	configSync.Status.AppliedTargets = len(configSync.Spec.Targets)
 	configSync.Status.SourceRevision = revisionSHA
-	configSync.Status.SourcePath = sourcePath
+	configSync.Status.SourcePath = configSync.Spec.Source.Git.Path
 
-	if err := r.Status().Update(ctx, &configSync); err != nil {
+	if err := r.updateStatusIfChanged(ctx, &configSync, previousStatus); err != nil {
 		return ctrl.Result{}, err
 	}
 
 	// --------------------------------------------------------------
 	// Step 4: Compute requeue interval
 	// --------------------------------------------------------------
-	requeueAfter := 30 * time.Second // default
-	if configSync.Spec.RefreshInterval != "" {
-		d, err := time.ParseDuration(configSync.Spec.RefreshInterval)
-		if err != nil {
-			setCondition(&configSync.Status, "Degraded", metav1.ConditionTrue, "InvalidRefreshInterval", "RefreshInterval must be a valid duration (e.g. 30s, 5m)")
-			_ = r.Status().Update(ctx, &configSync)
-			return ctrl.Result{}, nil
+	requeueAfter, err := reconcileInterval(configSync.Spec.RefreshInterval)
+	if err != nil {
+		setCondition(&configSync.Status, "Degraded", metav1.ConditionTrue, "InvalidRefreshInterval", err.Error())
+		if err := r.updateStatusIfChanged(ctx, &configSync, previousStatus); err != nil {
+			return ctrl.Result{}, err
 		}
-		requeueAfter = d
+		return ctrl.Result{}, nil
 	}
 
 	log.Info("Reconcile completed", "requeueAfter", requeueAfter.String())
@@ -144,9 +161,70 @@ func (r *ConfigSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 // --------------------------------------------------------------
 func (r *ConfigSyncReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&configsv1alpha1.ConfigSync{}).
+		For(
+			&configsv1alpha1.ConfigSync{},
+			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
+		).
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.findConfigSyncsForSecret)).
 		Named("configsync").
 		Complete(r)
+}
+
+func reconcileInterval(refreshInterval string) (time.Duration, error) {
+	if refreshInterval == "" {
+		return 30 * time.Second, nil
+	}
+	d, err := time.ParseDuration(refreshInterval)
+	if err != nil {
+		return 0, fmt.Errorf("RefreshInterval must be a valid duration (e.g. 30s, 5m): %w", err)
+	}
+	return d, nil
+}
+
+func (r *ConfigSyncReconciler) updateStatusIfChanged(
+	ctx context.Context,
+	configSync *configsv1alpha1.ConfigSync,
+	previousStatus configsv1alpha1.ConfigSyncStatus,
+) error {
+	if reflect.DeepEqual(previousStatus, configSync.Status) {
+		return nil
+	}
+	return r.Status().Update(ctx, configSync)
+}
+
+func (r *ConfigSyncReconciler) findConfigSyncsForSecret(ctx context.Context, obj client.Object) []reconcile.Request {
+	secret, ok := obj.(*corev1.Secret)
+	if !ok {
+		return nil
+	}
+
+	var resources configsv1alpha1.ConfigSyncList
+	if err := r.List(ctx, &resources); err != nil {
+		return nil
+	}
+
+	requests := make([]reconcile.Request, 0)
+	for i := range resources.Items {
+		resource := &resources.Items[i]
+		gitSource := resource.Spec.Source.Git
+		if gitSource == nil || gitSource.AuthSecretRef == nil {
+			continue
+		}
+
+		namespace := gitSource.AuthSecretRef.Namespace
+		if namespace == "" {
+			namespace = resource.Namespace
+		}
+		if namespace == secret.Namespace && gitSource.AuthSecretRef.Name == secret.Name {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      resource.Name,
+					Namespace: resource.Namespace,
+				},
+			})
+		}
+	}
+	return requests
 }
 
 // Condition helper
@@ -155,12 +233,19 @@ func setCondition(status *configsv1alpha1.ConfigSyncStatus, conditionType string
 	now := metav1.Now()
 	for i, c := range status.Conditions {
 		if c.Type == conditionType {
+			if c.Status == statusValue && c.Reason == reason && c.Message == message {
+				return
+			}
+			transitionTime := c.LastTransitionTime
+			if c.Status != statusValue {
+				transitionTime = now
+			}
 			status.Conditions[i] = metav1.Condition{
 				Type:               conditionType,
 				Status:             statusValue,
 				Reason:             reason,
 				Message:            message,
-				LastTransitionTime: now,
+				LastTransitionTime: transitionTime,
 			}
 			return
 		}

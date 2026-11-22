@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"golang.org/x/crypto/ssh"
@@ -31,16 +30,17 @@ func cloneOrUpdate(
 
 	logger := log.FromContext(ctx)
 
-	cacheBase := filepath.Join(os.TempDir(), "config-sync-cache")
-	repoName := sanitizeRepoURL(repoURL)
-	cachePath := filepath.Join(cacheBase, repoName)
-
-	logger.Info("preparing repository cache", "path", cachePath)
-
-	// Ensure base dir exists
-	if err := os.MkdirAll(cachePath, 0o755); err != nil {
-		return "", "", "", fmt.Errorf("failed to create cache path: %w", err)
+	cachePath, err := os.MkdirTemp("", "config-sync-*")
+	if err != nil {
+		return "", "", "", fmt.Errorf("failed to create temporary checkout: %w", err)
 	}
+	keepCheckout := false
+	defer func() {
+		if !keepCheckout {
+			_ = os.RemoveAll(cachePath)
+		}
+	}()
+	logger.Info("preparing isolated repository checkout", "path", cachePath)
 
 	// Build auth if needed
 	authMethodObj, err := buildAuth(ctx, c, authMethod, authSecretRef)
@@ -48,62 +48,22 @@ func cloneOrUpdate(
 		return "", "", "", err
 	}
 
-	// Determine clone vs open
-	var repo *git.Repository
+	logger.Info("cloning repository", "url", repoURL, "branch", branch)
+	cloneOpts := &git.CloneOptions{
+		URL:  repoURL,
+		Tags: git.AllTags,
+	}
+	if authMethodObj != nil {
+		cloneOpts.Auth = authMethodObj
+	}
+	if branch != "" {
+		cloneOpts.SingleBranch = true
+		cloneOpts.ReferenceName = plumbing.NewBranchReferenceName(branch)
+	}
 
-	gitDir := filepath.Join(cachePath, ".git")
-	_, statErr := os.Stat(gitDir)
-
-	if os.IsNotExist(statErr) {
-		// Clone fresh
-		logger.Info("cloning repository", "url", repoURL, "branch", branch)
-
-		cloneOpts := &git.CloneOptions{
-			URL:  repoURL,
-			Tags: git.AllTags,
-		}
-		if authMethodObj != nil {
-			cloneOpts.Auth = authMethodObj
-		}
-		if branch != "" {
-			cloneOpts.SingleBranch = true
-			cloneOpts.ReferenceName = plumbing.NewBranchReferenceName(branch)
-		}
-
-		repo, err = git.PlainClone(cachePath, false, cloneOpts)
-		if err != nil {
-			return "", "", "", fmt.Errorf("clone failed: %w", err)
-		}
-
-	} else {
-		// Repo exists → open & fetch
-		logger.Info("opening cached repository", "path", cachePath)
-
-		repo, err = git.PlainOpen(cachePath)
-		if err != nil {
-			logger.Error(err, "cached repo appears corrupted; removing")
-			_ = os.RemoveAll(cachePath)
-			return cloneOrUpdate(ctx, c, repoURL, revision, branch, authMethod, authSecretRef)
-		}
-
-		logger.Info("fetching latest updates from origin")
-
-		fetchOpts := &git.FetchOptions{
-			RemoteName: "origin",
-			Tags:       git.AllTags,
-			Force:      true,
-		}
-
-		if authMethodObj != nil {
-			fetchOpts.Auth = authMethodObj
-		}
-
-		err = repo.Fetch(fetchOpts)
-		if err != nil && err != git.NoErrAlreadyUpToDate {
-			logger.Error(err, "fetch failed; repository may be corrupted")
-			_ = os.RemoveAll(cachePath)
-			return cloneOrUpdate(ctx, c, repoURL, revision, branch, authMethod, authSecretRef)
-		}
+	repo, err := git.PlainClone(cachePath, false, cloneOpts)
+	if err != nil {
+		return "", "", "", fmt.Errorf("clone failed: %w", err)
 	}
 
 	w, err := repo.Worktree()
@@ -113,8 +73,13 @@ func cloneOrUpdate(
 
 	if revision != "" {
 		logger.Info("checking out revision", "revision", revision)
+		hash, err := resolveRevision(repo, revision)
+		if err != nil {
+			return "", "", "", fmt.Errorf("resolve revision %q failed: %w", revision, err)
+		}
 		err = w.Checkout(&git.CheckoutOptions{
-			Hash: plumbing.NewHash(revision),
+			Hash:  hash,
+			Force: true,
 		})
 		if err != nil {
 			return "", "", "", fmt.Errorf("checkout revision failed: %w", err)
@@ -155,15 +120,16 @@ func cloneOrUpdate(
 		"message", commit.Message,
 	)
 
+	keepCheckout = true
 	return head.Hash().String(), cachePath, commit.Message, nil
 }
 
-func sanitizeRepoURL(url string) string {
-	u := strings.ReplaceAll(url, "://", "_")
-	u = strings.ReplaceAll(u, "/", "_")
-	u = strings.ReplaceAll(u, "@", "_")
-	u = strings.ReplaceAll(u, ":", "_")
-	return u
+func resolveRevision(repo *git.Repository, revision string) (plumbing.Hash, error) {
+	hash, err := repo.ResolveRevision(plumbing.Revision(revision))
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("revision %q is not a branch, tag, or commit SHA", revision)
+	}
+	return *hash, nil
 }
 
 func firstSecretKey(data map[string][]byte, keys []string) []byte {
