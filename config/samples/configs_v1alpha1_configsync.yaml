@@ -16,7 +16,7 @@ spec:
       #   namespace: default
       #   name: git-creds
   targets:
-    - namespace: default
+    - namespace: configsync
       name: test-deploy
       type: Deployment
   refreshInterval: "5s"

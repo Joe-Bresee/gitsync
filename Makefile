@@ -123,6 +123,22 @@ docker-build: ## Build docker image with the manager.
 docker-push: ## Push docker image with the manager.
 	$(CONTAINER_TOOL) push ${IMG}
 
+KIND_LOAD_CLUSTER ?= gitsync
+.PHONY: setup-kind
+setup-kind: ## Create the local Kind cluster if needed and set the kubectl context.
+	@command -v $(KIND) >/dev/null 2>&1 || { \
+		echo "Kind is not installed. Please install Kind manually."; \
+		exit 1; \
+	}
+	@if ! "$(KIND)" get clusters | grep -qx "$(KIND_LOAD_CLUSTER)"; then \
+		"$(KIND)" create cluster --name $(KIND_LOAD_CLUSTER); \
+	fi
+	$(KUBECTL) config use-context kind-$(KIND_LOAD_CLUSTER)
+
+.PHONY: kind-load
+kind-load: setup-kind ## Load the manager image into a local Kind cluster.
+	$(KIND) load docker-image ${IMG} --name $(KIND_LOAD_CLUSTER)
+
 # PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
 # architectures. (i.e. make docker-buildx IMG=myregistry/mypoperator:0.0.1). To use this option you need to:
 # - be able to use docker buildx. More info: https://docs.docker.com/build/buildx/
@@ -166,6 +182,25 @@ uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified 
 deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
 	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${IMG}
 	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" apply -f -
+
+.PHONY: deploy-kind
+deploy-kind: setup-kind docker-build kind-load install deploy ## Build, load, install, and deploy everything to Kind.
+	$(KUBECTL) rollout restart deployment/gitsync-controller-manager -n gitsync-system
+	$(KUBECTL) rollout status deployment/gitsync-controller-manager -n gitsync-system --timeout=120s
+
+KIND_DELETE_CLUSTER ?= false
+.PHONY: undeploy-kind
+undeploy-kind: kustomize ## Remove the operator and CRDs from Kind; set KIND_DELETE_CLUSTER=true to delete the cluster too.
+	@if ! "$(KIND)" get clusters | grep -qx "$(KIND_LOAD_CLUSTER)"; then \
+		echo "Kind cluster '$(KIND_LOAD_CLUSTER)' does not exist."; \
+		exit 0; \
+	fi
+	$(KUBECTL) config use-context kind-$(KIND_LOAD_CLUSTER)
+	@$(MAKE) undeploy ignore-not-found=true
+	@$(MAKE) uninstall ignore-not-found=true
+	@if [ "$(KIND_DELETE_CLUSTER)" = "true" ]; then \
+		"$(KIND)" delete cluster --name $(KIND_LOAD_CLUSTER); \
+	fi
 
 .PHONY: undeploy
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
