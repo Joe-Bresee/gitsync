@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -205,12 +206,47 @@ func buildAuth(
 			return nil, fmt.Errorf("failed to load ssh private key: %w", err)
 		}
 
-		// ADD SUPPORT FOR KNOWN HOSTS
-		signer.HostKeyCallback = ssh.InsecureIgnoreHostKey()
+		knownHosts := firstSecretKey(secret.Data, []string{"known_hosts", "known-hosts"})
+		if knownHosts == nil {
+			return nil, fmt.Errorf("secret %s/%s missing known_hosts for ssh host verification",
+				authSecretRef.Namespace, authSecretRef.Name)
+		}
+		signer.HostKeyCallback, err = knownHostsCallback(knownHosts)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse known_hosts for Secret %s/%s: %w",
+				authSecretRef.Namespace, authSecretRef.Name, err)
+		}
 
 		return signer, nil
 
 	default:
 		return nil, fmt.Errorf("unsupported auth method, or something went wrong: %s", authMethod)
 	}
+}
+
+func knownHostsCallback(data []byte) (ssh.HostKeyCallback, error) {
+	file, err := os.CreateTemp("", "config-sync-known-hosts-*")
+	if err != nil {
+		return nil, fmt.Errorf("create temporary known_hosts file: %w", err)
+	}
+	path := file.Name()
+	defer os.Remove(path)
+
+	if err := file.Chmod(0o600); err != nil {
+		file.Close()
+		return nil, fmt.Errorf("restrict temporary known_hosts file: %w", err)
+	}
+	if _, err := file.Write(data); err != nil {
+		file.Close()
+		return nil, fmt.Errorf("write temporary known_hosts file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return nil, fmt.Errorf("close temporary known_hosts file: %w", err)
+	}
+
+	callback, err := knownhosts.New(path)
+	if err != nil {
+		return nil, err
+	}
+	return callback, nil
 }

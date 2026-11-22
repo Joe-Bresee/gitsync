@@ -56,9 +56,10 @@ type GitSource struct {
 	// +kubebuilder:validation:Enum=ssh;https;none
 	AuthMethod string `json:"authMethod,omitempty"`
 
-	// AuthSecretRef references a Secret that contains an SSH private key or basic auth credentials when
-	// `AuthMethod=ssh` or `AuthMethod=https`. The Secret should contain the key under a standard key
-	// name (e.g., `id_rsa` for SSH or `username` and `password` for HTTPS).
+	// AuthSecretRef references a Secret that contains an SSH private key and
+	// known_hosts data, or basic auth credentials when `AuthMethod=ssh` or
+	// `AuthMethod=https`. SSH Secrets should contain `id_rsa` (or `sshKey`) and
+	// `known_hosts`; HTTPS Secrets should contain `username` and `password`.
 	// +optional
 	AuthSecretRef *ObjectRef `json:"authSecretRef,omitempty"`
 }
