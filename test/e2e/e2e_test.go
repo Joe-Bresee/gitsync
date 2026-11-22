@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -171,6 +172,28 @@ var _ = Describe("Manager", Ordered, func() {
 				g.Expect(output).To(Equal("Running"), "Incorrect controller-manager pod status")
 			}
 			Eventually(verifyControllerUp).Should(Succeed())
+		})
+
+		It("should have only the required target resource permissions", func() {
+			By("verifying patch access for every supported target type")
+			for _, resource := range []string{"configmaps", "secrets", "deployments.apps"} {
+				cmd := exec.Command("kubectl", "auth", "can-i", "patch", resource,
+					"--namespace", namespace,
+					"--as", fmt.Sprintf("system:serviceaccount:%s:%s", namespace, serviceAccountName),
+				)
+				output, err := utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred(), "Failed to check patch access for %s", resource)
+				Expect(strings.TrimSpace(output)).To(Equal("yes"), "Service account should be able to patch %s", resource)
+			}
+
+			By("verifying target deletion is not granted")
+			cmd := exec.Command("kubectl", "auth", "can-i", "delete", "configmaps",
+				"--namespace", namespace,
+				"--as", fmt.Sprintf("system:serviceaccount:%s:%s", namespace, serviceAccountName),
+			)
+			output, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(strings.TrimSpace(output)).To(Equal("no"), "Service account should not be able to delete target resources")
 		})
 
 		It("should ensure the metrics endpoint is serving metrics", func() {

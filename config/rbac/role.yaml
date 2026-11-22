@@ -8,46 +8,30 @@ rules:
   - ""
   resources:
   - configmaps
-  - secrets
   verbs:
-  - create
-  - delete
-  - get
-  - list
   - patch
-  - update
-  - watch
 - apiGroups:
   - ""
   resources:
-  - namespaces
+  - secrets
   verbs:
   - get
   - list
+  - patch
   - watch
 - apiGroups:
   - apps
   resources:
   - deployments
   verbs:
-  - create
-  - delete
-  - get
-  - list
   - patch
-  - update
-  - watch
 - apiGroups:
   - configs.example.io
   resources:
   - configsyncs
   verbs:
-  - create
-  - delete
   - get
   - list
-  - patch
-  - update
   - watch
 - apiGroups:
   - configs.example.io

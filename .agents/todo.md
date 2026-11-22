@@ -23,7 +23,7 @@ optional features.
   when verification cannot be established.
 - [x] **Make validation behavior explicit.** Server-side dry-run validation is
   enabled by default before every real apply; tests may disable it explicitly.
-- [ ] **Verify target RBAC end to end.** Confirm every supported target type
+- [x] **Verify target RBAC end to end.** Confirm every supported target type
   and required verb works in a real cluster, while removing unnecessary
   permissions.
 

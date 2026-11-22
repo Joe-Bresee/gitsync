@@ -46,13 +46,13 @@ type ConfigSyncReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=configs.example.io,resources=configsyncs,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=configs.example.io,resources=configsyncs,verbs=get;list;watch
 // +kubebuilder:rbac:groups=configs.example.io,resources=configsyncs/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=configs.example.io,resources=configsyncs/finalizers,verbs=update
 
-// +kubebuilder:rbac:groups="",resources=configmaps;secrets,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=patch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;patch
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=patch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
