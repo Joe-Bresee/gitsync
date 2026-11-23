@@ -37,6 +37,7 @@ import (
 
 	configsv1alpha1 "github.com/joe-bresee/gitsync/api/v1alpha1"
 	"github.com/joe-bresee/gitsync/internal/controller"
+	gitsyncwebhook "github.com/joe-bresee/gitsync/internal/webhook"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -178,13 +179,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := (&controller.ConfigSyncReconciler{
+	reconciler := &controller.ConfigSyncReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
+	}
+	if err := reconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ConfigSync")
 		os.Exit(1)
 	}
+	webhookServer.Register("/webhooks/gitsync/", &gitsyncwebhook.Handler{
+		Client:  mgr.GetClient(),
+		Trigger: reconciler.Reconcile,
+	})
 	// +kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {

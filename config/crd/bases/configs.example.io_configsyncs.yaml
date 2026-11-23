@@ -39,6 +39,75 @@ spec:
           spec:
             description: spec defines the desired state of ConfigSync
             properties:
+              clusters:
+                description: Clusters defines named remote cluster credential boundaries.
+                items:
+                  description: |-
+                    ClusterSpec defines a credential boundary for a named remote cluster.
+                    Remote clusters are opt-in and require a kubeconfig Secret.
+                  properties:
+                    allowedNamespaces:
+                      description: AllowedNamespaces restricts remote writes. Empty
+                        allows all namespaces.
+                      items:
+                        type: string
+                      type: array
+                    kubeconfigSecretRef:
+                      description: KubeconfigSecretRef identifies a Secret containing
+                        a `kubeconfig` key.
+                      properties:
+                        name:
+                          description: Name is the name of the referenced object (ConfigMap
+                            or Secret).
+                          type: string
+                        namespace:
+                          description: Namespace is the namespace of the referenced
+                            object.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    name:
+                      description: Name is the name referenced by target.cluster.
+                      minLength: 1
+                      type: string
+                  required:
+                  - kubeconfigSecretRef
+                  - name
+                  type: object
+                type: array
+              encryptedConfig:
+                description: EncryptedConfig enables optional SOPS/KMS decryption
+                  of source manifests.
+                properties:
+                  binary:
+                    description: Binary is an optional sops executable name or absolute
+                      path.
+                    type: string
+                  keySecretRef:
+                    description: |-
+                      KeySecretRef optionally references credentials consumed by the external
+                      decryption provider.
+                    properties:
+                      name:
+                        description: Name is the name of the referenced object (ConfigMap
+                          or Secret).
+                        type: string
+                      namespace:
+                        description: Namespace is the namespace of the referenced
+                          object.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  provider:
+                    description: Provider is currently `sops`.
+                    enum:
+                    - sops
+                    type: string
+                required:
+                - provider
+                type: object
               environment:
                 description: |-
                   Environment selects the branch and overlay for this ConfigSync.
@@ -66,6 +135,18 @@ spec:
                     description: Overlay is a repository-relative path appended to
                       spec.source.git.path.
                     type: string
+                type: object
+              pruning:
+                description: Pruning enables explicit deletion of managed resources
+                  absent from source.
+                properties:
+                  enabled:
+                    description: |-
+                      Enabled permits deletion of previously managed resources that disappear
+                      from the source. Disabled is the safe default.
+                    type: boolean
+                required:
+                - enabled
                 type: object
               refreshInterval:
                 description: |-
@@ -154,6 +235,11 @@ spec:
                   configuration to. Each target contains `namespace`, `name`, and `type`.
                 items:
                   properties:
+                    cluster:
+                      description: |-
+                        Cluster identifies the named cluster boundary in spec.clusters. An empty
+                        value or "local" targets the cluster in which the operator is running.
+                      type: string
                     name:
                       description: Name is the name of the target ConfigMap or Secret.
                       type: string
@@ -188,6 +274,60 @@ spec:
                     description: Data contains string values exposed to templates
                       as .Data and .Values.
                     type: object
+                type: object
+              transform:
+                description: Transform selects an optional external manifest transform.
+                properties:
+                  args:
+                    description: |-
+                      Args contains additional arguments passed to the selected binary.
+                      Arguments are passed directly and are never interpreted by a shell.
+                    items:
+                      type: string
+                    type: array
+                  binary:
+                    description: Binary is an optional executable name or absolute
+                      path.
+                    type: string
+                  release:
+                    description: Release is the Helm release name when Type=helm.
+                    type: string
+                  type:
+                    description: Type is kustomize, helm, or jsonnet.
+                    enum:
+                    - kustomize
+                    - helm
+                    - jsonnet
+                    type: string
+                required:
+                - type
+                type: object
+              webhook:
+                description: Webhook enables authenticated webhook-triggered reconciliation.
+                properties:
+                  enabled:
+                    description: Enabled serves the Git push webhook endpoint.
+                    type: boolean
+                  path:
+                    description: Path is the optional webhook URL path suffix.
+                    type: string
+                  secretRef:
+                    description: SecretRef references a Secret containing `token`
+                      or `secret`.
+                    properties:
+                      name:
+                        description: Name is the name of the referenced object (ConfigMap
+                          or Secret).
+                        type: string
+                      namespace:
+                        description: Namespace is the namespace of the referenced
+                          object.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                required:
+                - enabled
                 type: object
             required:
             - targets
@@ -284,11 +424,38 @@ spec:
                   LastSyncedTime is the timestamp of the last successful sync operation.
                 format: date-time
                 type: string
+              managedResources:
+                description: ManagedResources records objects owned by this ConfigSync
+                  for pruning.
+                items:
+                  description: ManagedObjectRef identifies a resource created by this
+                    ConfigSync.
+                  properties:
+                    apiVersion:
+                      type: string
+                    cluster:
+                      type: string
+                    kind:
+                      type: string
+                    name:
+                      type: string
+                    namespace:
+                      type: string
+                  required:
+                  - apiVersion
+                  - kind
+                  - name
+                  type: object
+                type: array
               previousSourceRevision:
                 description: |-
                   PreviousSourceRevision records the revision applied before the current
                   revision, when a sync changes revisions.
                 type: string
+              prunedResources:
+                description: PrunedResources is the number of resources removed by
+                  the latest sync.
+                type: integer
               rollbackRevision:
                 description: RollbackRevision records the explicit rollback revision,
                   if any.

@@ -30,10 +30,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -41,9 +43,11 @@ import (
 
 	configsv1alpha1 "github.com/joe-bresee/gitsync/api/v1alpha1"
 	apply "github.com/joe-bresee/gitsync/internal/apply"
+	"github.com/joe-bresee/gitsync/internal/encrypted"
 	syncerrors "github.com/joe-bresee/gitsync/internal/errors"
 	source "github.com/joe-bresee/gitsync/internal/sources"
 	"github.com/joe-bresee/gitsync/internal/templates"
+	"github.com/joe-bresee/gitsync/internal/transforms"
 )
 
 // ConfigSyncReconciler reconciles a ConfigSync object
@@ -60,6 +64,7 @@ const (
 	defaultRetryDelay = 2 * time.Second
 	maxRetryDelay     = 2 * time.Minute
 	maxRetryAttempts  = 5
+	pruningFinalizer  = "configs.example.io/pruning"
 )
 
 // +kubebuilder:rbac:groups=configs.example.io,resources=configsyncs,verbs=get;list;watch
@@ -89,6 +94,37 @@ func (r *ConfigSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 	previousStatus := configSync.DeepCopy().Status
 
+	pruningEnabled := configSync.Spec.Pruning != nil && configSync.Spec.Pruning.Enabled
+	if !configSync.DeletionTimestamp.IsZero() {
+		if pruningEnabled && controllerutil.ContainsFinalizer(&configSync, pruningFinalizer) {
+			for _, managed := range previousStatus.ManagedResources {
+				targetClient, err := r.clientForCluster(ctx, &configSync, managed.Cluster)
+				if err != nil {
+					return r.handleFailure(ctx, &configSync, previousStatus, "ClusterBoundaryFailed", err)
+				}
+				if _, err := apply.PruneObjects(ctx, targetClient, []apply.ObjectRef{{
+					APIVersion: managed.APIVersion,
+					Kind:       managed.Kind,
+					Namespace:  managed.Namespace,
+					Name:       managed.Name,
+				}}, nil); err != nil {
+					return r.handleFailure(ctx, &configSync, previousStatus, "PruneFailed", err)
+				}
+			}
+		}
+		controllerutil.RemoveFinalizer(&configSync, pruningFinalizer)
+		if err := r.Update(ctx, &configSync); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
+	}
+	if pruningEnabled && !controllerutil.ContainsFinalizer(&configSync, pruningFinalizer) {
+		controllerutil.AddFinalizer(&configSync, pruningFinalizer)
+		if err := r.Update(ctx, &configSync); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	// --------------------------------------------------------------
 	// Step 1: Fetch source and determine revision
 	// --------------------------------------------------------------
@@ -113,14 +149,37 @@ func (r *ConfigSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return r.handleFailure(ctx, &configSync, previousStatus, "EnvironmentInvalid", err)
 	}
 
+	transformedPath := sourcePath
+	cleanupTransformed := func() {}
+	decryptedPath, cleanupDecrypted, err := encrypted.DecryptSource(sourcePath, configSync.Spec.EncryptedConfig)
+	if err != nil {
+		return r.handleFailure(ctx, &configSync, previousStatus, "EncryptedConfigFailed", err)
+	}
+	defer cleanupDecrypted()
+	transformedPath = decryptedPath
+
+	transformedPath, cleanupTransformed, err = transforms.TransformSource(transformedPath, configSync.Spec.Transform)
+	if err != nil {
+		return r.handleFailure(ctx, &configSync, previousStatus, "TransformFailed", err)
+	}
+	defer cleanupTransformed()
+
 	// --------------------------------------------------------------
 	// Step 2: Apply desired state
 	// --------------------------------------------------------------
 	// Always apply so periodic reconciliation repairs out-of-band edits and
 	// restores targets that were deleted without a source revision change.
 	log.Info("Applying desired state", "revision", revisionSHA)
+	desiredManaged := make([]apply.ObjectRef, 0)
+	desiredByCluster := make(map[string][]apply.ObjectRef)
+	configSync.Status.PrunedResources = 0
+	configSync.Status.ManagedResources = nil
 	for _, target := range configSync.Spec.Targets {
-		applyPath := sourcePath
+		targetClient, err := r.clientForCluster(ctx, &configSync, target.Cluster)
+		if err != nil {
+			return r.handleFailure(ctx, &configSync, previousStatus, "ClusterBoundaryFailed", err)
+		}
+		applyPath := transformedPath
 		cleanupRendered := func() {}
 
 		if configSync.Spec.Template != nil {
@@ -157,7 +216,7 @@ func (r *ConfigSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 				Values:   values,
 			}
 
-			renderedPath, cleanup, err := templates.RenderSource(sourcePath, templateData)
+			renderedPath, cleanup, err := templates.RenderSource(transformedPath, templateData)
 			if err != nil {
 				return r.handleFailure(ctx, &configSync, previousStatus, "TemplateRenderFailed", err)
 			}
@@ -165,7 +224,7 @@ func (r *ConfigSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			cleanupRendered = cleanup
 		}
 
-		err := apply.ApplyTarget(ctx, r.Client, applyPath, target)
+		err = apply.ApplyTarget(ctx, targetClient, applyPath, target)
 		cleanupRendered()
 		if err != nil {
 			reason := "ApplyFailed"
@@ -174,6 +233,65 @@ func (r *ConfigSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 				reason = "ManifestValidationFailed"
 			}
 			return r.handleFailure(ctx, &configSync, previousStatus, reason, err)
+		}
+		objects, err := apply.SourceObjects(applyPath, target)
+		if err != nil {
+			return r.handleFailure(ctx, &configSync, previousStatus, "ManifestValidationFailed", err)
+		}
+		for _, object := range objects {
+			desiredManaged = append(desiredManaged, object)
+			clusterName := target.Cluster
+			if clusterName == "" {
+				clusterName = "local"
+			}
+			desiredByCluster[clusterName] = append(desiredByCluster[clusterName], object)
+			configSync.Status.ManagedResources = append(configSync.Status.ManagedResources, configsv1alpha1.ManagedObjectRef{
+				APIVersion: object.APIVersion,
+				Kind:       object.Kind,
+				Namespace:  object.Namespace,
+				Name:       object.Name,
+				Cluster:    clusterName,
+			})
+		}
+	}
+	if configSync.Spec.Pruning != nil && configSync.Spec.Pruning.Enabled {
+		clustersToPrune := make(map[string]bool)
+		for clusterName := range desiredByCluster {
+			clustersToPrune[clusterName] = true
+		}
+		for _, managed := range previousStatus.ManagedResources {
+			clusterName := managed.Cluster
+			if clusterName == "" {
+				clusterName = "local"
+			}
+			clustersToPrune[clusterName] = true
+		}
+		for clusterName := range clustersToPrune {
+			desiredObjects := desiredByCluster[clusterName]
+			previousObjects := make([]apply.ObjectRef, 0)
+			for _, managed := range previousStatus.ManagedResources {
+				managedCluster := managed.Cluster
+				if managedCluster == "" {
+					managedCluster = "local"
+				}
+				if managedCluster == clusterName {
+					previousObjects = append(previousObjects, apply.ObjectRef{
+						APIVersion: managed.APIVersion,
+						Kind:       managed.Kind,
+						Namespace:  managed.Namespace,
+						Name:       managed.Name,
+					})
+				}
+			}
+			targetClient, err := r.clientForCluster(ctx, &configSync, clusterName)
+			if err != nil {
+				return r.handleFailure(ctx, &configSync, previousStatus, "ClusterBoundaryFailed", err)
+			}
+			pruned, err := apply.PruneObjects(ctx, targetClient, previousObjects, desiredObjects)
+			if err != nil {
+				return r.handleFailure(ctx, &configSync, previousStatus, "PruneFailed", err)
+			}
+			configSync.Status.PrunedResources += len(pruned)
 		}
 	}
 	setCondition(&configSync.Status, "Degraded", metav1.ConditionFalse, "ApplySucceeded", "All targets applied successfully")
@@ -320,6 +438,84 @@ func copyStringMap(values map[string]string) map[string]string {
 	return copied
 }
 
+// clientForCluster returns the local client or a client for an explicitly
+// configured remote cluster. It enforces the CR's namespace boundary.
+func (r *ConfigSyncReconciler) clientForCluster(ctx context.Context, configSync *configsv1alpha1.ConfigSync, clusterName string) (client.Client, error) {
+	if clusterName == "" || clusterName == "local" {
+		return r.Client, nil
+	}
+	var cluster *configsv1alpha1.ClusterSpec
+	for i := range configSync.Spec.Clusters {
+		if configSync.Spec.Clusters[i].Name == clusterName {
+			cluster = &configSync.Spec.Clusters[i]
+			break
+		}
+	}
+	if cluster == nil {
+		return nil, fmt.Errorf("target references undefined cluster %q", clusterName)
+	}
+	if cluster.KubeconfigSecretRef == nil {
+		return nil, fmt.Errorf("cluster %q has no kubeconfigSecretRef", clusterName)
+	}
+	namespace := cluster.KubeconfigSecretRef.Namespace
+	if namespace == "" {
+		namespace = configSync.Namespace
+	}
+	var secret corev1.Secret
+	if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: cluster.KubeconfigSecretRef.Name}, &secret); err != nil {
+		return nil, fmt.Errorf("failed to read kubeconfig Secret %s/%s for cluster %q: %w", namespace, cluster.KubeconfigSecretRef.Name, clusterName, err)
+	}
+	kubeconfig, ok := secret.Data["kubeconfig"]
+	if !ok || len(kubeconfig) == 0 {
+		return nil, fmt.Errorf("kubeconfig Secret %s/%s for cluster %q has no kubeconfig data", namespace, cluster.KubeconfigSecretRef.Name, clusterName)
+	}
+	restConfig, err := clientcmd.RESTConfigFromKubeConfig(kubeconfig)
+	if err != nil {
+		return nil, fmt.Errorf("invalid kubeconfig for cluster %q: %w", clusterName, err)
+	}
+	remote, err := client.New(restConfig, client.Options{Scheme: r.Scheme})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create client for cluster %q: %w", clusterName, err)
+	}
+	return &namespaceBoundClient{Client: remote, allowed: cluster.AllowedNamespaces}, nil
+}
+
+// namespaceBoundClient rejects writes outside explicitly allowed namespaces.
+type namespaceBoundClient struct {
+	client.Client
+	allowed []string
+}
+
+func (c *namespaceBoundClient) checkNamespace(obj client.Object) error {
+	if len(c.allowed) == 0 {
+		return nil
+	}
+	namespace := obj.GetNamespace()
+	if namespace == "" {
+		return nil
+	}
+	for _, allowed := range c.allowed {
+		if allowed == namespace {
+			return nil
+		}
+	}
+	return fmt.Errorf("cluster boundary forbids namespace %q", namespace)
+}
+
+func (c *namespaceBoundClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+	if err := c.checkNamespace(obj); err != nil {
+		return err
+	}
+	return c.Client.Patch(ctx, obj, patch, opts...)
+}
+
+func (c *namespaceBoundClient) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+	if err := c.checkNamespace(obj); err != nil {
+		return err
+	}
+	return c.Client.Delete(ctx, obj, opts...)
+}
+
 func (r *ConfigSyncReconciler) updateStatusIfChanged(
 	ctx context.Context,
 	configSync *configsv1alpha1.ConfigSync,
@@ -346,22 +542,55 @@ func (r *ConfigSyncReconciler) findConfigSyncsForSecret(ctx context.Context, obj
 	for i := range resources.Items {
 		resource := &resources.Items[i]
 		gitSource := resource.Spec.Source.Git
-		if gitSource == nil || gitSource.AuthSecretRef == nil {
+		matched := false
+		if gitSource != nil && gitSource.AuthSecretRef != nil {
+			namespace := gitSource.AuthSecretRef.Namespace
+			if namespace == "" {
+				namespace = resource.Namespace
+			}
+			if namespace == secret.Namespace && gitSource.AuthSecretRef.Name == secret.Name {
+				matched = true
+			}
+		}
+		if resource.Spec.Webhook != nil && resource.Spec.Webhook.SecretRef != nil {
+			namespace := resource.Spec.Webhook.SecretRef.Namespace
+			if namespace == "" {
+				namespace = resource.Namespace
+			}
+			if namespace == secret.Namespace && resource.Spec.Webhook.SecretRef.Name == secret.Name {
+				matched = true
+			}
+		}
+		if resource.Spec.EncryptedConfig != nil && resource.Spec.EncryptedConfig.KeySecretRef != nil {
+			namespace := resource.Spec.EncryptedConfig.KeySecretRef.Namespace
+			if namespace == "" {
+				namespace = resource.Namespace
+			}
+			if namespace == secret.Namespace && resource.Spec.EncryptedConfig.KeySecretRef.Name == secret.Name {
+				matched = true
+			}
+		}
+		for _, cluster := range resource.Spec.Clusters {
+			if cluster.KubeconfigSecretRef == nil {
+				continue
+			}
+			namespace := cluster.KubeconfigSecretRef.Namespace
+			if namespace == "" {
+				namespace = resource.Namespace
+			}
+			if namespace == secret.Namespace && cluster.KubeconfigSecretRef.Name == secret.Name {
+				matched = true
+			}
+		}
+		if !matched {
 			continue
 		}
-
-		namespace := gitSource.AuthSecretRef.Namespace
-		if namespace == "" {
-			namespace = resource.Namespace
-		}
-		if namespace == secret.Namespace && gitSource.AuthSecretRef.Name == secret.Name {
-			requests = append(requests, reconcile.Request{
-				NamespacedName: types.NamespacedName{
-					Name:      resource.Name,
-					Namespace: resource.Namespace,
-				},
-			})
-		}
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      resource.Name,
+				Namespace: resource.Namespace,
+			},
+		})
 	}
 	return requests
 }

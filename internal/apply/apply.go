@@ -26,6 +26,56 @@ import (
 // server-side dry-run before applying it.
 var DryRunEnabled = true
 
+// ObjectRef identifies a Kubernetes object in apply/pruning operations.
+type ObjectRef struct {
+	APIVersion string
+	Kind       string
+	Namespace  string
+	Name       string
+}
+
+// SourceObjects parses and validates a source and returns the object identities
+// that ApplyTarget would apply. It does not communicate with the API.
+func SourceObjects(sourcePath string, target configsv1alpha1.TargetRef) ([]ObjectRef, error) {
+	files, err := manifestFiles(sourcePath)
+	if err != nil {
+		return nil, syncerrors.Wrap("read manifests", sourcePath, false, err)
+	}
+	objects := make([]ObjectRef, 0)
+	for _, filePath := range files {
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return nil, syncerrors.Wrap("read manifest", filePath, false, err)
+		}
+		decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewReader(data), 4096)
+		for {
+			obj := &unstructured.Unstructured{}
+			if err := decoder.Decode(obj); err == io.EOF {
+				break
+			} else if err != nil {
+				return nil, err
+			}
+			if len(obj.Object) == 0 {
+				continue
+			}
+			namespace := obj.GetNamespace()
+			if target.Namespace != "" {
+				namespace = target.Namespace
+			}
+			if err := validateSupportedObject(obj, filePath); err != nil {
+				return nil, err
+			}
+			objects = append(objects, ObjectRef{
+				APIVersion: obj.GetAPIVersion(),
+				Kind:       obj.GetKind(),
+				Namespace:  namespace,
+				Name:       obj.GetName(),
+			})
+		}
+	}
+	return objects, nil
+}
+
 // ManifestValidationError identifies the exact source file and object that
 // failed validation, for actionable reconciliation status.
 type ManifestValidationError struct {
@@ -129,6 +179,38 @@ func ApplyTarget(ctx context.Context, c client.Client, sourcePath string, target
 	}
 
 	return nil
+}
+
+// PruneObjects deletes previously managed objects that are absent from desired.
+// Deletion is intentionally opt-in by the controller.
+func PruneObjects(ctx context.Context, c client.Client, previous, desired []ObjectRef) ([]ObjectRef, error) {
+	desiredSet := make(map[string]bool, len(desired))
+	for _, obj := range desired {
+		desiredSet[objectKey(obj)] = true
+	}
+	pruned := make([]ObjectRef, 0)
+	for _, old := range previous {
+		if desiredSet[objectKey(old)] {
+			continue
+		}
+		obj := &unstructured.Unstructured{}
+		obj.SetAPIVersion(old.APIVersion)
+		obj.SetKind(old.Kind)
+		obj.SetNamespace(old.Namespace)
+		obj.SetName(old.Name)
+		if err := c.Delete(ctx, obj); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return pruned, syncerrors.Wrap("prune", fmt.Sprintf("%s/%s", old.Kind, old.Name), isTransientAPIError(err), err)
+		}
+		pruned = append(pruned, old)
+	}
+	return pruned, nil
+}
+
+func objectKey(obj ObjectRef) string {
+	return fmt.Sprintf("%s|%s|%s|%s", obj.APIVersion, obj.Kind, obj.Namespace, obj.Name)
 }
 
 func isTransientAPIError(err error) bool {

@@ -56,3 +56,16 @@ func TestNonRetryableErrorsDoNotScheduleRetry(t *testing.T) {
 		t.Fatalf("expected no retry, got %s (retry=%t)", delay, retry)
 	}
 }
+
+func TestNamespaceBoundClientRejectsOutOfScopeNamespace(t *testing.T) {
+	bound := &namespaceBoundClient{allowed: []string{"allowed"}}
+	obj := &metav1.PartialObjectMetadata{}
+	obj.SetNamespace("forbidden")
+	if err := bound.checkNamespace(obj); err == nil {
+		t.Fatal("expected namespace boundary rejection")
+	}
+	obj.SetNamespace("allowed")
+	if err := bound.checkNamespace(obj); err != nil {
+		t.Fatalf("expected allowed namespace, got %v", err)
+	}
+}

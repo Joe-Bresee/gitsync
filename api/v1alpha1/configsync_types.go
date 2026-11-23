@@ -76,6 +76,84 @@ type TargetRef struct {
 	// `ConfigMap` or `Secret`.
 	// +kubebuilder:validation:Enum=ConfigMap;Secret;Deployment
 	Type string `json:"type"`
+
+	// Cluster identifies the named cluster boundary in spec.clusters. An empty
+	// value or "local" targets the cluster in which the operator is running.
+	// +optional
+	Cluster string `json:"cluster,omitempty"`
+}
+
+// ClusterSpec defines a credential boundary for a named remote cluster.
+// Remote clusters are opt-in and require a kubeconfig Secret.
+type ClusterSpec struct {
+	// Name is the name referenced by target.cluster.
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	// KubeconfigSecretRef identifies a Secret containing a `kubeconfig` key.
+	KubeconfigSecretRef *ObjectRef `json:"kubeconfigSecretRef"`
+
+	// AllowedNamespaces restricts remote writes. Empty allows all namespaces.
+	// +optional
+	AllowedNamespaces []string `json:"allowedNamespaces,omitempty"`
+}
+
+// PruningSpec enables explicit garbage collection of source resources.
+type PruningSpec struct {
+	// Enabled permits deletion of previously managed resources that disappear
+	// from the source. Disabled is the safe default.
+	Enabled bool `json:"enabled"`
+}
+
+// TransformSpec selects an optional external manifest transform.
+// External binaries are not required unless the selected type is configured.
+type TransformSpec struct {
+	// Type is kustomize, helm, or jsonnet.
+	// +kubebuilder:validation:Enum=kustomize;helm;jsonnet
+	Type string `json:"type"`
+
+	// Binary is an optional executable name or absolute path.
+	// +optional
+	Binary string `json:"binary,omitempty"`
+
+	// Release is the Helm release name when Type=helm.
+	// +optional
+	Release string `json:"release,omitempty"`
+
+	// Args contains additional arguments passed to the selected binary.
+	// Arguments are passed directly and are never interpreted by a shell.
+	// +optional
+	Args []string `json:"args,omitempty"`
+}
+
+// EncryptedConfigSpec enables optional SOPS/KMS decryption.
+type EncryptedConfigSpec struct {
+	// Provider is currently `sops`.
+	// +kubebuilder:validation:Enum=sops
+	Provider string `json:"provider"`
+
+	// KeySecretRef optionally references credentials consumed by the external
+	// decryption provider.
+	// +optional
+	KeySecretRef *ObjectRef `json:"keySecretRef,omitempty"`
+
+	// Binary is an optional sops executable name or absolute path.
+	// +optional
+	Binary string `json:"binary,omitempty"`
+}
+
+// WebhookSpec configures authenticated Git push reconciliation.
+type WebhookSpec struct {
+	// Enabled serves the Git push webhook endpoint.
+	Enabled bool `json:"enabled"`
+
+	// SecretRef references a Secret containing `token` or `secret`.
+	// +optional
+	SecretRef *ObjectRef `json:"secretRef,omitempty"`
+
+	// Path is the optional webhook URL path suffix.
+	// +optional
+	Path string `json:"path,omitempty"`
 }
 
 type ObjectRef struct {
@@ -123,6 +201,15 @@ type RollbackSpec struct {
 	Revision string `json:"revision"`
 }
 
+// ManagedObjectRef identifies a resource created by this ConfigSync.
+type ManagedObjectRef struct {
+	APIVersion string `json:"apiVersion"`
+	Kind       string `json:"kind"`
+	Namespace  string `json:"namespace,omitempty"`
+	Name       string `json:"name"`
+	Cluster    string `json:"cluster,omitempty"`
+}
+
 // ConfigSyncSpec defines the desired state of ConfigSync
 type ConfigSyncSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
@@ -156,6 +243,26 @@ type ConfigSyncSpec struct {
 	// branch/revision. Remove it to resume normal source selection.
 	// +optional
 	Rollback *RollbackSpec `json:"rollback,omitempty"`
+
+	// Pruning enables explicit deletion of managed resources absent from source.
+	// +optional
+	Pruning *PruningSpec `json:"pruning,omitempty"`
+
+	// Transform selects an optional external manifest transform.
+	// +optional
+	Transform *TransformSpec `json:"transform,omitempty"`
+
+	// EncryptedConfig enables optional SOPS/KMS decryption of source manifests.
+	// +optional
+	EncryptedConfig *EncryptedConfigSpec `json:"encryptedConfig,omitempty"`
+
+	// Webhook enables authenticated webhook-triggered reconciliation.
+	// +optional
+	Webhook *WebhookSpec `json:"webhook,omitempty"`
+
+	// Clusters defines named remote cluster credential boundaries.
+	// +optional
+	Clusters []ClusterSpec `json:"clusters,omitempty"`
 
 	// RefreshInterval controls how frequently the operator should re-fetch
 	// the source and re-apply targets. It uses Kubernetes duration format
@@ -220,6 +327,14 @@ type ConfigSyncStatus struct {
 	// EnvironmentOverlay records the resolved repository-relative overlay path.
 	// +optional
 	EnvironmentOverlay string `json:"environmentOverlay,omitempty"`
+
+	// ManagedResources records objects owned by this ConfigSync for pruning.
+	// +optional
+	ManagedResources []ManagedObjectRef `json:"managedResources,omitempty"`
+
+	// PrunedResources is the number of resources removed by the latest sync.
+	// +optional
+	PrunedResources int `json:"prunedResources,omitempty"`
 
 	// Conditions represent the current state of the ConfigSync resource.
 	// This follows the Kubernetes condition convention (type, status, reason,

@@ -67,13 +67,20 @@ func TestManifestFilesListsYAMLFilesInDirectory(t *testing.T) {
 
 type recordingClient struct {
 	client.Client
-	patchErr error
-	patches  int
+	patchErr  error
+	patches   int
+	deleteErr error
+	deletes   int
 }
 
 func (c *recordingClient) Patch(_ context.Context, _ client.Object, _ client.Patch, _ ...client.PatchOption) error {
 	c.patches++
 	return c.patchErr
+}
+
+func (c *recordingClient) Delete(_ context.Context, _ client.Object, _ ...client.DeleteOption) error {
+	c.deletes++
+	return c.deleteErr
 }
 
 func TestApplyTargetRejectsMalformedManifest(t *testing.T) {
@@ -215,5 +222,26 @@ func TestCleanObjectForApplyRemovesServerMetadata(t *testing.T) {
 	}
 	if _, ok := obj.Object["status"]; ok {
 		t.Error("expected status to be removed")
+	}
+}
+
+func TestPruneObjectsDeletesOnlyAbsentResources(t *testing.T) {
+	c := &recordingClient{}
+	previous := []ObjectRef{
+		{APIVersion: "v1", Kind: "ConfigMap", Namespace: "default", Name: "kept"},
+		{APIVersion: "v1", Kind: "Secret", Namespace: "default", Name: "old"},
+	}
+	desired := []ObjectRef{
+		{APIVersion: "v1", Kind: "ConfigMap", Namespace: "default", Name: "kept"},
+	}
+	pruned, err := PruneObjects(context.Background(), c, previous, desired)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.deletes != 1 {
+		t.Fatalf("expected one delete, got %d", c.deletes)
+	}
+	if len(pruned) != 1 || pruned[0].Name != "old" {
+		t.Fatalf("unexpected pruned objects: %#v", pruned)
 	}
 }

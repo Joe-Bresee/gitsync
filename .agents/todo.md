@@ -51,15 +51,15 @@ optional features.
 
 ## P3 - optional extensions
 
-- [ ] **Pruning and garbage collection.** Track managed resources and require
+- [x] **Pruning and garbage collection.** Track managed resources and require
   explicit opt-in before deleting resources absent from source.
-- [ ] **Webhook-triggered reconciliation.** Add authenticated Git push triggers
+- [x] **Webhook-triggered reconciliation.** Add authenticated Git push triggers
   while retaining periodic reconciliation.
-- [ ] **Additional transforms.** Evaluate Helm, Kustomize, and Jsonnet
+- [x] **Additional transforms.** Evaluate Helm, Kustomize, and Jsonnet
   separately without expanding the MVP contract implicitly.
-- [ ] **Encrypted configuration.** Evaluate SOPS/KMS integration and key
+- [x] **Encrypted configuration.** Evaluate SOPS/KMS integration and key
   management.
-- [ ] **Multi-cluster synchronization.** Define credential boundaries and
+- [x] **Multi-cluster synchronization.** Define credential boundaries and
   failure isolation before implementation.
 - [ ] **Release and documentation improvements.** Standardize project identity,
   add architecture documentation, publish versioned images, and automate
@@ -67,8 +67,7 @@ optional features.
 
 ## Next milestone
 
-The next milestone is complete when SSH host verification, RBAC end-to-end
-verification, expanded tests, and deterministic CI are all finished.
+complete/check completion of deterministic CI.
 think about aws support eks/ google kuberenets: google $300 credit!
 docs page? explaining product like a true OS proj?
 live testing and analyses of project against a website w/ simulated traffic, downs, rollbacks, etc? grafana/prom?
