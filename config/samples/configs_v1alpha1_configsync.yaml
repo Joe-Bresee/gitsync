@@ -15,6 +15,9 @@ spec:
       # authSecretRef:
       #   namespace: default
       #   name: git-creds
+  # template:
+  #   data:
+  #     environment: production
   targets:
     - namespace: configsync
       name: test-deploy

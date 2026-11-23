@@ -38,6 +38,7 @@ import (
 	configsv1alpha1 "github.com/joe-bresee/gitsync/api/v1alpha1"
 	apply "github.com/joe-bresee/gitsync/internal/apply"
 	source "github.com/joe-bresee/gitsync/internal/sources"
+	"github.com/joe-bresee/gitsync/internal/templates"
 )
 
 // ConfigSyncReconciler reconciles a ConfigSync object
@@ -111,7 +112,56 @@ func (r *ConfigSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// restores targets that were deleted without a source revision change.
 	log.Info("Applying desired state", "revision", revisionSHA)
 	for _, target := range configSync.Spec.Targets {
-		if err := apply.ApplyTarget(ctx, r.Client, sourcePath, target); err != nil {
+		applyPath := sourcePath
+		cleanupRendered := func() {}
+
+		if configSync.Spec.Template != nil {
+			values := configSync.Spec.Template.Data
+			if values == nil {
+				values = map[string]string{}
+			}
+			templateData := templates.Data{
+				ConfigSync: templates.ConfigSyncData{
+					Name:      configSync.Name,
+					Namespace: configSync.Namespace,
+				},
+				Source: templates.SourceData{
+					Path:     configSync.Spec.Source.Git.Path,
+					Revision: revisionSHA,
+				},
+				Target: templates.TargetData{
+					Namespace: target.Namespace,
+					Name:      target.Name,
+					Type:      target.Type,
+				},
+				Revision: revisionSHA,
+				Data:     values,
+				Values:   values,
+			}
+
+			renderedPath, cleanup, err := templates.RenderSource(sourcePath, templateData)
+			if err != nil {
+				setCondition(&configSync.Status, "Degraded", metav1.ConditionTrue, "TemplateRenderFailed", err.Error())
+				if err := r.updateStatusIfChanged(ctx, &configSync, previousStatus); err != nil {
+					return ctrl.Result{}, err
+				}
+				requeueAfter, requeueErr := reconcileInterval(configSync.Spec.RefreshInterval)
+				if requeueErr != nil {
+					setCondition(&configSync.Status, "Degraded", metav1.ConditionTrue, "InvalidRefreshInterval", requeueErr.Error())
+					if err := r.updateStatusIfChanged(ctx, &configSync, previousStatus); err != nil {
+						return ctrl.Result{}, err
+					}
+					return ctrl.Result{}, nil
+				}
+				return ctrl.Result{RequeueAfter: requeueAfter}, nil
+			}
+			applyPath = renderedPath
+			cleanupRendered = cleanup
+		}
+
+		err := apply.ApplyTarget(ctx, r.Client, applyPath, target)
+		cleanupRendered()
+		if err != nil {
 			setCondition(&configSync.Status, "Degraded", metav1.ConditionTrue, "ApplyFailed", err.Error())
 			if err := r.updateStatusIfChanged(ctx, &configSync, previousStatus); err != nil {
 				return ctrl.Result{}, err

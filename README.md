@@ -17,9 +17,9 @@ This project allows me to:
 - Learn Kubernetes concepts like CRDs, controllers, reconcilers, and status conditions  
  
 MVP notes
- - This operator currently applies raw manifests from the configured source directly to the cluster.
- - Templating/rendering (Helm/Kustomize/text templates) is intentionally deferred for the MVP. See `.agents/todo.md` for planned templating work.
+ - This operator applies raw manifests or Go-template-rendered manifests from the configured source to the cluster.
  - Runtime validation: the operator performs a server-side dry-run before applying manifests to catch admission/validation errors. Tests can disable this behavior by setting `apply.DryRunEnabled = false`.
+ - Template syntax validation occurs before the rendered output is applied.
 
 ## Features
 
@@ -32,7 +32,6 @@ MVP notes
 - **RBAC**: Proper role-based access controls for cluster operations
 
 ### 🚧 **Planned/In-Progress:**
-- **Templating System**: Go template support for dynamic configuration rendering
 - **Enhanced Validation**: Comprehensive YAML/manifest validation before application  
 - **Testing Suite**: Unit tests and integration tests with envtest
 - **Rollback Support**: Revert to previous Git commits
@@ -122,6 +121,61 @@ make test
 # View available targets
 make help
 ```
+
+## Go-template rendering
+
+Set `spec.template` to render YAML source files with Go's `text/template`
+package before server-side apply:
+
+```yaml
+spec:
+  template:
+    data:
+      environment: staging
+  source:
+    git:
+      repoURL: https://github.com/example/configs.git
+      path: config/app.yaml
+  targets:
+    - namespace: staging
+      name: app-config
+      type: ConfigMap
+```
+
+The source may be a YAML file or a directory containing `.yaml` and `.yml`
+files. Before rendering, every source YAML template is parsed for syntax
+errors. Rendering and YAML parsing of the result happen before dry-run apply.
+
+Template input is:
+
+| Field | Value |
+| --- | --- |
+| `.ConfigSync.Name` | ConfigSync resource name |
+| `.ConfigSync.Namespace` | ConfigSync resource namespace |
+| `.Source.Path` | configured Git source path |
+| `.Source.Revision` | resolved Git revision SHA |
+| `.Revision` | resolved Git revision SHA (shorthand) |
+| `.Target.Name` | current target name |
+| `.Target.Namespace` | current target namespace |
+| `.Target.Type` | current target type |
+| `.Data` / `.Values` | user values from `spec.template.data` |
+
+For example:
+
+```yaml
+metadata:
+  name: {{ .Target.Name }}
+  namespace: {{ .Target.Namespace }}
+data:
+  environment: {{ printf "%q" .Data.environment }}
+  revision: {{ printf "%q" .Revision }}
+```
+
+Escaping: Go-template rendering uses `text/template`, not `html/template`.
+It does not automatically escape HTML, JSON, or YAML. Quote string values
+with `printf "%q"` and use appropriate template functions or explicit encoding
+before inserting values into YAML. Missing `.Data`/`.Values` keys fail rendering
+rather than silently producing empty values.
 
 ## Known Issues & Limitations
 

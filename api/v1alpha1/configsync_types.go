@@ -86,6 +86,14 @@ type ObjectRef struct {
 	Namespace string `json:"namespace,omitempty"`
 }
 
+// TemplateSpec configures Go-template rendering of YAML source files before
+// they are applied. When Template is omitted, source manifests are used unchanged.
+type TemplateSpec struct {
+	// Data contains string values exposed to templates as .Data and .Values.
+	// +optional
+	Data map[string]string `json:"data,omitempty"`
+}
+
 // ConfigSyncSpec defines the desired state of ConfigSync
 type ConfigSyncSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
@@ -103,6 +111,10 @@ type ConfigSyncSpec struct {
 	// configuration to. Each target contains `namespace`, `name`, and `type`.
 	// +kubebuilder:validation:MinItems=1
 	Targets []TargetRef `json:"targets"`
+
+	// Template enables Go-template rendering for source YAML manifests.
+	// +optional
+	Template *TemplateSpec `json:"template,omitempty"`
 
 	// RefreshInterval controls how frequently the operator should re-fetch
 	// the source and re-apply targets. It uses Kubernetes duration format

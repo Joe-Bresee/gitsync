@@ -138,6 +138,17 @@ spec:
                   type: object
                 minItems: 1
                 type: array
+              template:
+                description: Template enables Go-template rendering for source YAML
+                  manifests.
+                properties:
+                  data:
+                    additionalProperties:
+                      type: string
+                    description: Data contains string values exposed to templates
+                      as .Data and .Values.
+                    type: object
+                type: object
             required:
             - targets
             type: object
