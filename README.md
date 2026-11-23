@@ -21,6 +21,7 @@ MVP notes
  - Before apply, manifests are validated locally for required Kubernetes object fields and supported kinds (`ConfigMap`, `Secret`, and `Deployment`). Invalid objects are reported in status with the source file, kind/name, and corrective reason.
  - Runtime validation: the operator performs a server-side dry-run before applying manifests to catch admission/validation errors. Tests can disable this behavior by setting `apply.DryRunEnabled = false`.
  - Template syntax validation occurs before the rendered output is applied.
+ - SOPS can decrypt YAML source files using credentials from a referenced Kubernetes Secret or from credentials mounted in the operator environment.
  - Transient Git and Kubernetes API failures use bounded exponential retries and
    emit Kubernetes warning/normal events for failures and recovery.
  - `spec.rollback.revision` pins synchronization to a Git branch, tag, or commit
@@ -30,16 +31,26 @@ MVP notes
 
 ### ✅ **Currently Implemented:**
 - **Git Source Integration**: Clone and fetch from Git repositories with SSH/HTTPS authentication
-- **Manifest Application**: Parse and apply YAML manifests to Kubernetes resources
-- **Status Management**: Track sync status with proper Kubernetes conditions (`Degraded`)
+- **Manifest Application**: Parse, validate, dry-run, and apply YAML manifests to Kubernetes resources
+- **Status Management**: Track sync status, source revisions, environments, managed resources, and Kubernetes conditions
 - **Reconciliation Loop**: Configurable refresh intervals with change detection via Git SHA comparison
+- **Go Templates**: Render source manifests with environment, source, target, and custom values
+- **Environment Selection**: Select Git branches and repository overlays and expose environment data to templates
+- **Rollback**: Pin synchronization to an explicit Git revision and retain the previous successful revision
+- **SOPS Decryption**: Decrypt YAML sources with explicit Secret-to-environment/file mappings and secure temporary credentials
+- **Pruning**: Opt-in deletion of previously managed source resources
+- **Manifest Transforms**: Optional Kustomize, Helm, and Jsonnet transform binaries
+- **Webhook Reconciliation**: Authenticated Git push triggers alongside periodic reconciliation
+- **Remote Clusters**: Named credential boundaries with kubeconfig Secrets and namespace restrictions
+- **Failure Handling**: Actionable errors, Kubernetes events, and bounded retry backoff
 - **Multi-Target Support**: Apply configuration to multiple Kubernetes resources from a single source
 - **RBAC**: Proper role-based access controls for cluster operations
 
 ### 🚧 **Planned/In-Progress:**
-- **Testing Suite**: Additional integration tests with envtest
-- **Pruning & Garbage Collection**: Clean up orphaned resources
-- **Multi-Environment Support**: Branch/environment-specific configurations
+- **Release & Distribution**: Standardized project identity, versioned images, and automated releases
+- **Project Documentation**: Architecture guidance and a public documentation site
+- **Operational Examples**: Live traffic, rollback, monitoring, and Grafana demonstrations
+- **Expanded Cloud Validation**: AWS EKS and Google Kubernetes Engine testing
 
  ## Technologies
 
@@ -56,9 +67,12 @@ MVP notes
 **Current State**: MVP is functional with core GitOps capabilities. The operator can successfully:
 - Clone Git repositories and detect changes
 - Apply Kubernetes manifests to cluster resources
-- Track synchronization status and handle failures
+- Render templates and select environment-specific branches and overlays
+- Decrypt SOPS YAML sources using Kubernetes Secret credentials
+- Transform manifests, prune opt-in orphaned resources, and reconcile webhook changes
+- Track synchronization status and handle transient failures
 
-**Development Phase**: Testing and enhancement phase - core functionality works but needs comprehensive testing and additional features.
+**Development Phase**: Reliability and distribution phase. The core reconciliation pipeline is implemented; remaining work is focused on broader integration testing, release automation, documentation, and cloud validation.
 
 ## Quickstart
 
@@ -255,5 +269,6 @@ reconciliation.
 
 ## Known Issues & Limitations
 
-1. **Testing Infrastructure**: Tests require envtest binaries that aren't currently installed. Run `make setup-envtest` to install them.
-2. **Multi-branch**: Environment-specific branch support is planned.
+1. **Testing Infrastructure**: The full envtest suite requires setup assets. Run `make setup-envtest` before `make test`.
+2. **SOPS Binary**: SOPS must be installed in the operator image or configured with an explicit executable path.
+3. **External Providers**: PGP keyrings and provider-specific credentials must be mounted or configured in the operator environment unless supplied explicitly through a Secret.
