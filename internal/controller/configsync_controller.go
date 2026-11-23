@@ -18,16 +18,19 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -38,6 +41,7 @@ import (
 
 	configsv1alpha1 "github.com/joe-bresee/gitsync/api/v1alpha1"
 	apply "github.com/joe-bresee/gitsync/internal/apply"
+	syncerrors "github.com/joe-bresee/gitsync/internal/errors"
 	source "github.com/joe-bresee/gitsync/internal/sources"
 	"github.com/joe-bresee/gitsync/internal/templates"
 )
@@ -45,8 +49,18 @@ import (
 // ConfigSyncReconciler reconciles a ConfigSync object
 type ConfigSyncReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
+
+	retryMu    sync.Mutex
+	retryState map[types.NamespacedName]int
 }
+
+const (
+	defaultRetryDelay = 2 * time.Second
+	maxRetryDelay     = 2 * time.Minute
+	maxRetryAttempts  = 5
+)
 
 // +kubebuilder:rbac:groups=configs.example.io,resources=configsyncs,verbs=get;list;watch
 // +kubebuilder:rbac:groups=configs.example.io,resources=configsyncs/status,verbs=get;update;patch
@@ -80,19 +94,7 @@ func (r *ConfigSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// --------------------------------------------------------------
 	revisionSHA, sourcePath, checkoutPath, commitMsg, err := source.FetchSource(&configSync, ctx, r.Client)
 	if err != nil {
-		setCondition(&configSync.Status, "Degraded", metav1.ConditionTrue, "SourceFetchFailed", err.Error())
-		if err := r.updateStatusIfChanged(ctx, &configSync, previousStatus); err != nil {
-			return ctrl.Result{}, err
-		}
-		requeueAfter, requeueErr := reconcileInterval(configSync.Spec.RefreshInterval)
-		if requeueErr != nil {
-			setCondition(&configSync.Status, "Degraded", metav1.ConditionTrue, "InvalidRefreshInterval", requeueErr.Error())
-			if err := r.updateStatusIfChanged(ctx, &configSync, previousStatus); err != nil {
-				return ctrl.Result{}, err
-			}
-			return ctrl.Result{}, nil
-		}
-		return ctrl.Result{RequeueAfter: requeueAfter}, nil
+		return r.handleFailure(ctx, &configSync, previousStatus, "SourceFetchFailed", err)
 	}
 
 	// Log the fetched commit message (if any)
@@ -108,15 +110,7 @@ func (r *ConfigSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	environment, err := source.ResolveEnvironment(&configSync)
 	if err != nil {
-		setCondition(&configSync.Status, "Degraded", metav1.ConditionTrue, "EnvironmentInvalid", err.Error())
-		if err := r.updateStatusIfChanged(ctx, &configSync, previousStatus); err != nil {
-			return ctrl.Result{}, err
-		}
-		requeueAfter, requeueErr := reconcileInterval(configSync.Spec.RefreshInterval)
-		if requeueErr != nil {
-			return ctrl.Result{}, nil
-		}
-		return ctrl.Result{RequeueAfter: requeueAfter}, nil
+		return r.handleFailure(ctx, &configSync, previousStatus, "EnvironmentInvalid", err)
 	}
 
 	// --------------------------------------------------------------
@@ -165,19 +159,7 @@ func (r *ConfigSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 			renderedPath, cleanup, err := templates.RenderSource(sourcePath, templateData)
 			if err != nil {
-				setCondition(&configSync.Status, "Degraded", metav1.ConditionTrue, "TemplateRenderFailed", err.Error())
-				if err := r.updateStatusIfChanged(ctx, &configSync, previousStatus); err != nil {
-					return ctrl.Result{}, err
-				}
-				requeueAfter, requeueErr := reconcileInterval(configSync.Spec.RefreshInterval)
-				if requeueErr != nil {
-					setCondition(&configSync.Status, "Degraded", metav1.ConditionTrue, "InvalidRefreshInterval", requeueErr.Error())
-					if err := r.updateStatusIfChanged(ctx, &configSync, previousStatus); err != nil {
-						return ctrl.Result{}, err
-					}
-					return ctrl.Result{}, nil
-				}
-				return ctrl.Result{RequeueAfter: requeueAfter}, nil
+				return r.handleFailure(ctx, &configSync, previousStatus, "TemplateRenderFailed", err)
 			}
 			applyPath = renderedPath
 			cleanupRendered = cleanup
@@ -186,19 +168,12 @@ func (r *ConfigSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		err := apply.ApplyTarget(ctx, r.Client, applyPath, target)
 		cleanupRendered()
 		if err != nil {
-			setCondition(&configSync.Status, "Degraded", metav1.ConditionTrue, "ApplyFailed", err.Error())
-			if err := r.updateStatusIfChanged(ctx, &configSync, previousStatus); err != nil {
-				return ctrl.Result{}, err
+			reason := "ApplyFailed"
+			var validationErr *apply.ManifestValidationError
+			if errors.As(err, &validationErr) {
+				reason = "ManifestValidationFailed"
 			}
-			requeueAfter, requeueErr := reconcileInterval(configSync.Spec.RefreshInterval)
-			if requeueErr != nil {
-				setCondition(&configSync.Status, "Degraded", metav1.ConditionTrue, "InvalidRefreshInterval", requeueErr.Error())
-				if err := r.updateStatusIfChanged(ctx, &configSync, previousStatus); err != nil {
-					return ctrl.Result{}, err
-				}
-				return ctrl.Result{}, nil
-			}
-			return ctrl.Result{RequeueAfter: requeueAfter}, nil
+			return r.handleFailure(ctx, &configSync, previousStatus, reason, err)
 		}
 	}
 	setCondition(&configSync.Status, "Degraded", metav1.ConditionFalse, "ApplySucceeded", "All targets applied successfully")
@@ -208,7 +183,14 @@ func (r *ConfigSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// --------------------------------------------------------------
 	configSync.Status.LastSyncedTime = &metav1.Time{Time: time.Now()}
 	configSync.Status.AppliedTargets = len(configSync.Spec.Targets)
+	if configSync.Status.SourceRevision != "" && configSync.Status.SourceRevision != revisionSHA {
+		configSync.Status.PreviousSourceRevision = configSync.Status.SourceRevision
+	}
 	configSync.Status.SourceRevision = revisionSHA
+	configSync.Status.RollbackRevision = ""
+	if configSync.Spec.Rollback != nil {
+		configSync.Status.RollbackRevision = configSync.Spec.Rollback.Revision
+	}
 	statusSourcePath := configSync.Spec.Source.Git.Path
 	if environment.Overlay != "" {
 		statusSourcePath = filepath.Join(statusSourcePath, environment.Overlay)
@@ -222,17 +204,19 @@ func (r *ConfigSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if err := r.updateStatusIfChanged(ctx, &configSync, previousStatus); err != nil {
 		return ctrl.Result{}, err
 	}
+	r.clearRetry(req.NamespacedName)
+	if conditionWasDegraded(previousStatus) {
+		r.eventf(&configSync, corev1.EventTypeNormal, "SyncRecovered", "ConfigSync recovered at source revision %s", revisionSHA)
+	} else {
+		r.eventf(&configSync, corev1.EventTypeNormal, "SyncSucceeded", "All targets applied successfully at source revision %s", revisionSHA)
+	}
 
 	// --------------------------------------------------------------
 	// Step 4: Compute requeue interval
 	// --------------------------------------------------------------
 	requeueAfter, err := reconcileInterval(configSync.Spec.RefreshInterval)
 	if err != nil {
-		setCondition(&configSync.Status, "Degraded", metav1.ConditionTrue, "InvalidRefreshInterval", err.Error())
-		if err := r.updateStatusIfChanged(ctx, &configSync, previousStatus); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{}, nil
+		return r.handleFailure(ctx, &configSync, previousStatus, "InvalidRefreshInterval", err)
 	}
 
 	log.Info("Reconcile completed", "requeueAfter", requeueAfter.String())
@@ -242,6 +226,9 @@ func (r *ConfigSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 // SetupWithManager
 // --------------------------------------------------------------
 func (r *ConfigSyncReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if r.Recorder == nil {
+		r.Recorder = mgr.GetEventRecorderFor("configsync")
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(
 			&configsv1alpha1.ConfigSync{},
@@ -250,6 +237,68 @@ func (r *ConfigSyncReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.findConfigSyncsForSecret)).
 		Named("configsync").
 		Complete(r)
+}
+
+func (r *ConfigSyncReconciler) handleFailure(
+	ctx context.Context,
+	configSync *configsv1alpha1.ConfigSync,
+	previousStatus configsv1alpha1.ConfigSyncStatus,
+	reason string,
+	err error,
+) (ctrl.Result, error) {
+	setCondition(&configSync.Status, "Degraded", metav1.ConditionTrue, reason, err.Error())
+	if statusErr := r.updateStatusIfChanged(ctx, configSync, previousStatus); statusErr != nil {
+		return ctrl.Result{}, statusErr
+	}
+	r.eventf(configSync, corev1.EventTypeWarning, reason, "%s", err)
+
+	delay, retry := r.retryDelay(client.ObjectKeyFromObject(configSync), err)
+	if !retry {
+		return ctrl.Result{}, nil
+	}
+	return ctrl.Result{RequeueAfter: delay}, nil
+}
+
+func (r *ConfigSyncReconciler) retryDelay(key types.NamespacedName, err error) (time.Duration, bool) {
+	if !syncerrors.IsRetryable(err) {
+		return 0, false
+	}
+	r.retryMu.Lock()
+	defer r.retryMu.Unlock()
+	if r.retryState == nil {
+		r.retryState = make(map[types.NamespacedName]int)
+	}
+	attempt := r.retryState[key]
+	if attempt >= maxRetryAttempts {
+		return maxRetryDelay, true
+	}
+	r.retryState[key] = attempt + 1
+	delay := defaultRetryDelay << attempt
+	if delay > maxRetryDelay {
+		delay = maxRetryDelay
+	}
+	return delay, true
+}
+
+func (r *ConfigSyncReconciler) clearRetry(key types.NamespacedName) {
+	r.retryMu.Lock()
+	defer r.retryMu.Unlock()
+	delete(r.retryState, key)
+}
+
+func (r *ConfigSyncReconciler) eventf(obj client.Object, eventType, reason, message string, args ...interface{}) {
+	if r.Recorder != nil {
+		r.Recorder.Eventf(obj, eventType, reason, message, args...)
+	}
+}
+
+func conditionWasDegraded(status configsv1alpha1.ConfigSyncStatus) bool {
+	for _, condition := range status.Conditions {
+		if condition.Type == "Degraded" && condition.Status == metav1.ConditionTrue {
+			return true
+		}
+	}
+	return false
 }
 
 func reconcileInterval(refreshInterval string) (time.Duration, error) {

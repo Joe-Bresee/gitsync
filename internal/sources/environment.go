@@ -32,6 +32,13 @@ func ResolveEnvironment(configSync *configsv1alpha1.ConfigSync) (EffectiveEnviro
 		Branch:   strings.TrimSpace(gitSource.Branch),
 		Data:     map[string]string{},
 	}
+	if configSync.Spec.Rollback != nil {
+		revision := strings.TrimSpace(configSync.Spec.Rollback.Revision)
+		if revision == "" {
+			return EffectiveEnvironment{}, fmt.Errorf("spec.rollback.revision must not be empty")
+		}
+		resolved.Revision = revision
+	}
 
 	if configSync.Spec.Environment != nil {
 		env := configSync.Spec.Environment

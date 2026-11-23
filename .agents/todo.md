@@ -29,10 +29,10 @@ optional features.
 
 ## P1 - reliability and observability
 
-- [ ] **Improve failure handling.** Add typed, actionable errors, Kubernetes
+- [x] **Improve failure handling.** Add typed, actionable errors, Kubernetes
   events for failures and recoveries, and bounded exponential retry for
   transient Git and Kubernetes errors.
-- [ ] **Complete test coverage.** Add tests for malformed manifests, dry-run
+- [x] **Complete test coverage.** Add tests for malformed manifests, dry-run
   rejection, apply/update/delete behavior, cleanup, retries, and an envtest
   reconciliation that verifies a target is created and updated.
 - [x] **Make CI deterministic.** Ensure envtest assets are installed by the
@@ -42,9 +42,9 @@ optional features.
 
 - [x] **Add templating.** Implement a defined Go-template rendering stage with
   syntax validation, documented input data, escaping rules, and tests.
-- [ ] **Add manifest validation.** Validate supported Kubernetes objects before
+- [x] **Add manifest validation.** Validate supported Kubernetes objects before
   apply and report object-level errors in status.
-- [ ] **Add rollback.** Support previous or explicit Git revisions, deployment
+- [x] **Add rollback.** Support previous or explicit Git revisions, deployment
   history, and rollback status.
 - [x] **Add environment support.** Define branch, overlay, and environment
   value selection without ambiguity.
@@ -69,3 +69,6 @@ optional features.
 
 The next milestone is complete when SSH host verification, RBAC end-to-end
 verification, expanded tests, and deterministic CI are all finished.
+think about aws support eks/ google kuberenets: google $300 credit!
+docs page? explaining product like a true OS proj?
+live testing and analyses of project against a website w/ simulated traffic, downs, rollbacks, etc? grafana/prom?

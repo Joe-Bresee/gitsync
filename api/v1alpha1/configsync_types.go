@@ -115,6 +115,14 @@ type EnvironmentSpec struct {
 	Data map[string]string `json:"data,omitempty"`
 }
 
+// RollbackSpec pins synchronization to a previous or explicitly selected Git
+// revision until the field is removed.
+type RollbackSpec struct {
+	// Revision is a Git branch, tag, or commit SHA to apply.
+	// +kubebuilder:validation:MinLength=1
+	Revision string `json:"revision"`
+}
+
 // ConfigSyncSpec defines the desired state of ConfigSync
 type ConfigSyncSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
@@ -143,6 +151,11 @@ type ConfigSyncSpec struct {
 	// revision and takes precedence over branch.
 	// +optional
 	Environment *EnvironmentSpec `json:"environment,omitempty"`
+
+	// Rollback selects an explicit Git revision instead of the normal source
+	// branch/revision. Remove it to resume normal source selection.
+	// +optional
+	Rollback *RollbackSpec `json:"rollback,omitempty"`
 
 	// RefreshInterval controls how frequently the operator should re-fetch
 	// the source and re-apply targets. It uses Kubernetes duration format
@@ -177,6 +190,15 @@ type ConfigSyncStatus struct {
 	// was applied during the last sync.
 	// +optional
 	SourceRevision string `json:"sourceRevision,omitempty"`
+
+	// PreviousSourceRevision records the revision applied before the current
+	// revision, when a sync changes revisions.
+	// +optional
+	PreviousSourceRevision string `json:"previousSourceRevision,omitempty"`
+
+	// RollbackRevision records the explicit rollback revision, if any.
+	// +optional
+	RollbackRevision string `json:"rollbackRevision,omitempty"`
 
 	// AppliedTargets is the number of targets that were successfully
 	// created or updated during the last sync.

@@ -74,6 +74,18 @@ spec:
                   (e.g. `10m`, `1h`). If omitted, the operator's default behavior applies.
                 pattern: ^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$
                 type: string
+              rollback:
+                description: |-
+                  Rollback selects an explicit Git revision instead of the normal source
+                  branch/revision. Remove it to resume normal source selection.
+                properties:
+                  revision:
+                    description: Revision is a Git branch, tag, or commit SHA to apply.
+                    minLength: 1
+                    type: string
+                required:
+                - revision
+                type: object
               source:
                 description: |-
                   foo is an example field of ConfigSync. Edit configsync_types.go to remove/update
@@ -271,6 +283,15 @@ spec:
                   The status of each condition is one of True, False, or Unknown.
                   LastSyncedTime is the timestamp of the last successful sync operation.
                 format: date-time
+                type: string
+              previousSourceRevision:
+                description: |-
+                  PreviousSourceRevision records the revision applied before the current
+                  revision, when a sync changes revisions.
+                type: string
+              rollbackRevision:
+                description: RollbackRevision records the explicit rollback revision,
+                  if any.
                 type: string
               sourcePath:
                 description: SourcePath records the path within the source repository

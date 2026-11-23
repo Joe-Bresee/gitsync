@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	configsv1alpha1 "github.com/joe-bresee/gitsync/api/v1alpha1"
+	syncerrors "github.com/joe-bresee/gitsync/internal/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -39,7 +40,7 @@ func FetchSource(configSync *configsv1alpha1.ConfigSync, ctx context.Context, c 
 		authSecretRef,
 	)
 	if err != nil {
-		return "", "", "", "", fmt.Errorf("failed to clone or update git repository: %w", err)
+		return "", "", "", "", syncerrors.Wrap("fetch Git source", configSync.Spec.Source.Git.RepoURL, true, err)
 	}
 
 	configuredPath := configSync.Spec.Source.Git.Path

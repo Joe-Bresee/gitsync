@@ -18,8 +18,13 @@ This project allows me to:
  
 MVP notes
  - This operator applies raw manifests or Go-template-rendered manifests from the configured source to the cluster.
+ - Before apply, manifests are validated locally for required Kubernetes object fields and supported kinds (`ConfigMap`, `Secret`, and `Deployment`). Invalid objects are reported in status with the source file, kind/name, and corrective reason.
  - Runtime validation: the operator performs a server-side dry-run before applying manifests to catch admission/validation errors. Tests can disable this behavior by setting `apply.DryRunEnabled = false`.
  - Template syntax validation occurs before the rendered output is applied.
+ - Transient Git and Kubernetes API failures use bounded exponential retries and
+   emit Kubernetes warning/normal events for failures and recovery.
+ - `spec.rollback.revision` pins synchronization to a Git branch, tag, or commit
+   SHA. The previous successful revision is retained in status.
 
 ## Features
 
@@ -32,9 +37,7 @@ MVP notes
 - **RBAC**: Proper role-based access controls for cluster operations
 
 ### 🚧 **Planned/In-Progress:**
-- **Enhanced Validation**: Comprehensive YAML/manifest validation before application  
-- **Testing Suite**: Unit tests and integration tests with envtest
-- **Rollback Support**: Revert to previous Git commits
+- **Testing Suite**: Additional integration tests with envtest
 - **Pruning & Garbage Collection**: Clean up orphaned resources
 - **Multi-Environment Support**: Branch/environment-specific configurations
 
@@ -216,7 +219,5 @@ override same-named template values.
 
 ## Known Issues & Limitations
 
-1. **Testing Infrastructure**: Tests require envtest binaries that aren't currently installed. Run `make envtest` to install them.
-2. **Templating**: Go template support is planned but not yet implemented.
-3. **Rollback**: Rollback to previous Git commits is not yet implemented.
-4. **Multi-branch**: Environment-specific branch support is planned.
+1. **Testing Infrastructure**: Tests require envtest binaries that aren't currently installed. Run `make setup-envtest` to install them.
+2. **Multi-branch**: Environment-specific branch support is planned.

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	configsv1alpha1 "github.com/joe-bresee/gitsync/api/v1alpha1"
@@ -110,6 +111,81 @@ data:
 	}
 	if c.patches != 1 {
 		t.Fatalf("expected one dry-run patch and no real apply, got %d patches", c.patches)
+	}
+}
+
+func TestApplyTargetValidatesSupportedObjectsBeforePatches(t *testing.T) {
+	tests := []struct {
+		name       string
+		manifest   string
+		wantReason string
+	}{
+		{
+			name:       "missing metadata name",
+			manifest:   "apiVersion: v1\nkind: ConfigMap\nmetadata: {}\n",
+			wantReason: "metadata.name is required",
+		},
+		{
+			name:       "unsupported kind",
+			manifest:   "apiVersion: v1\nkind: Service\nmetadata:\n  name: app\n",
+			wantReason: "unsupported kind \"Service\"",
+		},
+		{
+			name: "deployment missing selector",
+			manifest: `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app
+spec:
+  template:
+    spec:
+      containers:
+        - name: app
+          image: nginx
+`,
+			wantReason: "spec.selector is required",
+		},
+		{
+			name: "deployment container missing image",
+			manifest: `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app
+spec:
+  selector:
+    matchLabels:
+      app: app
+  template:
+    spec:
+      containers:
+        - name: app
+`,
+			wantReason: "requires",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sourcePath := filepath.Join(t.TempDir(), "invalid.yaml")
+			if err := os.WriteFile(sourcePath, []byte(tt.manifest), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			c := &recordingClient{}
+			err := ApplyTarget(context.Background(), c, sourcePath, configsv1alpha1.TargetRef{})
+			if err == nil {
+				t.Fatal("expected manifest validation error")
+			}
+			var validationErr *ManifestValidationError
+			if !errors.As(err, &validationErr) {
+				t.Fatalf("expected ManifestValidationError, got %T: %v", err, err)
+			}
+			if !strings.Contains(validationErr.Reason, tt.wantReason) {
+				t.Fatalf("expected reason containing %q, got %q", tt.wantReason, validationErr.Reason)
+			}
+			if c.patches != 0 {
+				t.Fatalf("validation should happen before patching; got %d patches", c.patches)
+			}
+		})
 	}
 }
 

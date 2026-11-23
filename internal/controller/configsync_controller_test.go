@@ -18,9 +18,14 @@ package controller
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 
+	git "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -28,6 +33,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	configsv1alpha1 "github.com/joe-bresee/gitsync/api/v1alpha1"
+	"github.com/joe-bresee/gitsync/internal/apply"
 )
 
 var _ = Describe("ConfigSync Controller", func() {
@@ -87,6 +93,65 @@ var _ = Describe("ConfigSync Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
 			// Example: If you expect a certain status condition after reconciliation, verify it here.
+		})
+
+		It("creates and updates a target from a Git source", func() {
+			previousDryRun := apply.DryRunEnabled
+			apply.DryRunEnabled = false
+			defer func() { apply.DryRunEnabled = previousDryRun }()
+
+			repoPath := GinkgoT().TempDir()
+			repo, err := git.PlainInit(repoPath, false)
+			Expect(err).NotTo(HaveOccurred())
+			worktree, err := repo.Worktree()
+			Expect(err).NotTo(HaveOccurred())
+
+			manifestPath := filepath.Join(repoPath, "config.yaml")
+			writeManifest := func(value string) {
+				Expect(os.WriteFile(manifestPath, []byte("apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: reconciled-target\ndata:\n  value: "+value+"\n"), 0o600)).To(Succeed())
+				_, err = worktree.Add("config.yaml")
+				Expect(err).NotTo(HaveOccurred())
+				_, err = worktree.Commit("update config", &git.CommitOptions{
+					Author: &object.Signature{Name: "test", Email: "test@example.com"},
+				})
+				Expect(err).NotTo(HaveOccurred())
+			}
+			writeManifest("one")
+
+			name := types.NamespacedName{Name: "git-target-sync", Namespace: "default"}
+			resource := &configsv1alpha1.ConfigSync{
+				ObjectMeta: metav1.ObjectMeta{Name: name.Name, Namespace: name.Namespace},
+				Spec: configsv1alpha1.ConfigSyncSpec{
+					Source: configsv1alpha1.SourceSpec{Git: &configsv1alpha1.GitSource{
+						RepoURL: repoPath, Path: "config.yaml", AuthMethod: "none",
+					}},
+					Targets: []configsv1alpha1.TargetRef{{Namespace: "default", Name: "reconciled-target", Type: "ConfigMap"}},
+				},
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+			defer func() {
+				Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+			}()
+
+			reconciler := &ConfigSyncReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: name})
+			Expect(err).NotTo(HaveOccurred())
+
+			target := &corev1.ConfigMap{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "reconciled-target", Namespace: "default"}, target)).To(Succeed())
+			Expect(target.Data["value"]).To(Equal("one"))
+
+			writeManifest("two")
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: name})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "reconciled-target", Namespace: "default"}, target)).To(Succeed())
+			Expect(target.Data["value"]).To(Equal("two"))
+
+			Expect(k8sClient.Delete(ctx, target)).To(Succeed())
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: name})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "reconciled-target", Namespace: "default"}, target)).To(Succeed())
+			Expect(target.Data["value"]).To(Equal("two"))
 		})
 	})
 })
