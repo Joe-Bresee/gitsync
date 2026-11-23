@@ -39,6 +39,34 @@ spec:
           spec:
             description: spec defines the desired state of ConfigSync
             properties:
+              environment:
+                description: |-
+                  Environment selects the branch and overlay for this ConfigSync.
+                  Its explicit settings take precedence over compact values on
+                  spec.source.git. If revision is set, it remains the explicit Git
+                  revision and takes precedence over branch.
+                properties:
+                  branch:
+                    description: |-
+                      Branch selects the Git branch for this environment. If omitted, the
+                      repository default branch is used unless spec.source.git.revision is set.
+                    type: string
+                  data:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      Data contains additional string values exposed to templates as
+                      .Environment.Data and merged into .Data/.Values.
+                    type: object
+                  name:
+                    description: Name identifies the environment (for example, staging
+                      or production).
+                    type: string
+                  overlay:
+                    description: Overlay is a repository-relative path appended to
+                      spec.source.git.path.
+                    type: string
+                type: object
               refreshInterval:
                 description: |-
                   RefreshInterval controls how frequently the operator should re-fetch
@@ -220,6 +248,16 @@ spec:
                   - type
                   type: object
                 type: array
+              environment:
+                description: Environment records the resolved environment name.
+                type: string
+              environmentBranch:
+                description: EnvironmentBranch records the resolved Git branch.
+                type: string
+              environmentOverlay:
+                description: EnvironmentOverlay records the resolved repository-relative
+                  overlay path.
+                type: string
               lastSyncedTime:
                 description: |-
                   conditions represent the current state of the ConfigSync resource.

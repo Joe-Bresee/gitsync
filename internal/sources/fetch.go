@@ -16,6 +16,11 @@ func FetchSource(configSync *configsv1alpha1.ConfigSync, ctx context.Context, c 
 		return "", "", "", "", fmt.Errorf("only Git sources are supported; please set spec.source.git")
 	}
 
+	environment, err := ResolveEnvironment(configSync)
+	if err != nil {
+		return "", "", "", "", err
+	}
+
 	authSecretRef := configSync.Spec.Source.Git.AuthSecretRef
 	if authSecretRef != nil && strings.TrimSpace(authSecretRef.Namespace) == "" {
 		authSecretRef = &configsv1alpha1.ObjectRef{
@@ -28,8 +33,8 @@ func FetchSource(configSync *configsv1alpha1.ConfigSync, ctx context.Context, c 
 		ctx,
 		c,
 		configSync.Spec.Source.Git.RepoURL,
-		configSync.Spec.Source.Git.Revision,
-		configSync.Spec.Source.Git.Branch,
+		environment.Revision,
+		environment.Branch,
 		configSync.Spec.Source.Git.AuthMethod,
 		authSecretRef,
 	)
@@ -38,6 +43,9 @@ func FetchSource(configSync *configsv1alpha1.ConfigSync, ctx context.Context, c 
 	}
 
 	configuredPath := configSync.Spec.Source.Git.Path
+	if environment.Overlay != "" {
+		configuredPath = filepath.Join(configuredPath, environment.Overlay)
+	}
 	resolvedPath, err := resolveGitSourcePath(sourcePath, configuredPath)
 	if err != nil {
 		return "", "", "", "", err

@@ -15,6 +15,12 @@ spec:
       # authSecretRef:
       #   namespace: default
       #   name: git-creds
+  environment:
+    name: production
+    branch: main
+    overlay: overlays/production
+    data:
+      region: us-east
   # template:
   #   data:
   #     environment: production

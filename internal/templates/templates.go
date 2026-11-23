@@ -28,15 +28,24 @@ type TargetData struct {
 	Type      string
 }
 
+// EnvironmentData describes the resolved environment selection.
+type EnvironmentData struct {
+	Name    string
+	Branch  string
+	Overlay string
+	Data    map[string]string
+}
+
 // Data is the complete input available to source Go templates.
 // Data and Values contain the same user-defined string values.
 type Data struct {
-	ConfigSync ConfigSyncData
-	Source     SourceData
-	Target     TargetData
-	Revision   string
-	Data       map[string]string
-	Values     map[string]string
+	ConfigSync  ConfigSyncData
+	Source      SourceData
+	Target      TargetData
+	Environment EnvironmentData
+	Revision    string
+	Data        map[string]string
+	Values      map[string]string
 }
 
 // ValidateTemplate parses templateText and reports syntax errors.

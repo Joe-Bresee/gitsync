@@ -158,6 +158,10 @@ Template input is:
 | `.Target.Name` | current target name |
 | `.Target.Namespace` | current target namespace |
 | `.Target.Type` | current target type |
+| `.Environment.Name` | resolved environment name |
+| `.Environment.Branch` | resolved environment branch |
+| `.Environment.Overlay` | resolved repository-relative overlay |
+| `.Environment.Data` | environment-specific values |
 | `.Data` / `.Values` | user values from `spec.template.data` |
 
 For example:
@@ -176,6 +180,39 @@ It does not automatically escape HTML, JSON, or YAML. Quote string values
 with `printf "%q"` and use appropriate template functions or explicit encoding
 before inserting values into YAML. Missing `.Data`/`.Values` keys fail rendering
 rather than silently producing empty values.
+
+## Environment selection
+
+Use `spec.environment` to select an environment branch and repository overlay
+explicitly:
+
+```yaml
+spec:
+  environment:
+    name: production
+    branch: release
+    overlay: overlays/production
+    data:
+      region: us-east
+  source:
+    git:
+      repoURL: https://github.com/example/configs.git
+      path: environments
+  targets:
+    - namespace: production
+      name: app-config
+      type: ConfigMap
+```
+
+The effective source path is `spec.source.git.path` plus `environment.overlay`.
+Environment branch settings take precedence over `spec.source.git.branch`.
+An explicit `spec.source.git.revision` (branch, tag, or commit SHA) always
+takes precedence over a branch and is recorded in status.
+
+Environment template input is available as `.Environment.Name`,
+`.Environment.Branch`, `.Environment.Overlay`, and `.Environment.Data`.
+Environment data is merged into `.Data` and `.Values`; environment values
+override same-named template values.
 
 ## Known Issues & Limitations
 

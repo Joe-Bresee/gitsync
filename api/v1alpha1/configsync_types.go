@@ -94,6 +94,27 @@ type TemplateSpec struct {
 	Data map[string]string `json:"data,omitempty"`
 }
 
+// EnvironmentSpec describes an unambiguous Git branch and source overlay selection.
+type EnvironmentSpec struct {
+	// Name identifies the environment (for example, staging or production).
+	// +optional
+	Name string `json:"name,omitempty"`
+
+	// Branch selects the Git branch for this environment. If omitted, the
+	// repository default branch is used unless spec.source.git.revision is set.
+	// +optional
+	Branch string `json:"branch,omitempty"`
+
+	// Overlay is a repository-relative path appended to spec.source.git.path.
+	// +optional
+	Overlay string `json:"overlay,omitempty"`
+
+	// Data contains additional string values exposed to templates as
+	// .Environment.Data and merged into .Data/.Values.
+	// +optional
+	Data map[string]string `json:"data,omitempty"`
+}
+
 // ConfigSyncSpec defines the desired state of ConfigSync
 type ConfigSyncSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
@@ -115,6 +136,13 @@ type ConfigSyncSpec struct {
 	// Template enables Go-template rendering for source YAML manifests.
 	// +optional
 	Template *TemplateSpec `json:"template,omitempty"`
+
+	// Environment selects the branch and overlay for this ConfigSync.
+	// Its explicit settings take precedence over compact values on
+	// spec.source.git. If revision is set, it remains the explicit Git
+	// revision and takes precedence over branch.
+	// +optional
+	Environment *EnvironmentSpec `json:"environment,omitempty"`
 
 	// RefreshInterval controls how frequently the operator should re-fetch
 	// the source and re-apply targets. It uses Kubernetes duration format
@@ -158,6 +186,18 @@ type ConfigSyncStatus struct {
 	// SourcePath records the path within the source repository that was applied during the last sync.
 	// +optional
 	SourcePath string `json:"sourcePath,omitempty"`
+
+	// Environment records the resolved environment name.
+	// +optional
+	Environment string `json:"environment,omitempty"`
+
+	// EnvironmentBranch records the resolved Git branch.
+	// +optional
+	EnvironmentBranch string `json:"environmentBranch,omitempty"`
+
+	// EnvironmentOverlay records the resolved repository-relative overlay path.
+	// +optional
+	EnvironmentOverlay string `json:"environmentOverlay,omitempty"`
 
 	// Conditions represent the current state of the ConfigSync resource.
 	// This follows the Kubernetes condition convention (type, status, reason,

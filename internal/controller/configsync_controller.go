@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"time"
 
@@ -105,6 +106,19 @@ func (r *ConfigSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		defer os.RemoveAll(checkoutPath)
 	}
 
+	environment, err := source.ResolveEnvironment(&configSync)
+	if err != nil {
+		setCondition(&configSync.Status, "Degraded", metav1.ConditionTrue, "EnvironmentInvalid", err.Error())
+		if err := r.updateStatusIfChanged(ctx, &configSync, previousStatus); err != nil {
+			return ctrl.Result{}, err
+		}
+		requeueAfter, requeueErr := reconcileInterval(configSync.Spec.RefreshInterval)
+		if requeueErr != nil {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{RequeueAfter: requeueAfter}, nil
+	}
+
 	// --------------------------------------------------------------
 	// Step 2: Apply desired state
 	// --------------------------------------------------------------
@@ -120,6 +134,10 @@ func (r *ConfigSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			if values == nil {
 				values = map[string]string{}
 			}
+			values = copyStringMap(values)
+			for key, value := range environment.Data {
+				values[key] = value
+			}
 			templateData := templates.Data{
 				ConfigSync: templates.ConfigSyncData{
 					Name:      configSync.Name,
@@ -133,6 +151,12 @@ func (r *ConfigSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 					Namespace: target.Namespace,
 					Name:      target.Name,
 					Type:      target.Type,
+				},
+				Environment: templates.EnvironmentData{
+					Name:    environment.Name,
+					Branch:  environment.Branch,
+					Overlay: environment.Overlay,
+					Data:    environment.Data,
 				},
 				Revision: revisionSHA,
 				Data:     values,
@@ -185,7 +209,15 @@ func (r *ConfigSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	configSync.Status.LastSyncedTime = &metav1.Time{Time: time.Now()}
 	configSync.Status.AppliedTargets = len(configSync.Spec.Targets)
 	configSync.Status.SourceRevision = revisionSHA
-	configSync.Status.SourcePath = configSync.Spec.Source.Git.Path
+	statusSourcePath := configSync.Spec.Source.Git.Path
+	if environment.Overlay != "" {
+		statusSourcePath = filepath.Join(statusSourcePath, environment.Overlay)
+		statusSourcePath = filepath.ToSlash(statusSourcePath)
+	}
+	configSync.Status.SourcePath = statusSourcePath
+	configSync.Status.Environment = environment.Name
+	configSync.Status.EnvironmentBranch = environment.Branch
+	configSync.Status.EnvironmentOverlay = environment.Overlay
 
 	if err := r.updateStatusIfChanged(ctx, &configSync, previousStatus); err != nil {
 		return ctrl.Result{}, err
@@ -229,6 +261,14 @@ func reconcileInterval(refreshInterval string) (time.Duration, error) {
 		return 0, fmt.Errorf("RefreshInterval must be a valid duration (e.g. 30s, 5m): %w", err)
 	}
 	return d, nil
+}
+
+func copyStringMap(values map[string]string) map[string]string {
+	copied := make(map[string]string, len(values))
+	for key, value := range values {
+		copied[key] = value
+	}
+	return copied
 }
 
 func (r *ConfigSyncReconciler) updateStatusIfChanged(

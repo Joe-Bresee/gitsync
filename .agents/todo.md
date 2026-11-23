@@ -40,13 +40,13 @@ optional features.
 
 ## P2 - planned user-facing capabilities
 
-- [ ] **Add templating.** Implement a defined Go-template rendering stage with
+- [x] **Add templating.** Implement a defined Go-template rendering stage with
   syntax validation, documented input data, escaping rules, and tests.
 - [ ] **Add manifest validation.** Validate supported Kubernetes objects before
   apply and report object-level errors in status.
 - [ ] **Add rollback.** Support previous or explicit Git revisions, deployment
   history, and rollback status.
-- [ ] **Add environment support.** Define branch, overlay, and environment
+- [x] **Add environment support.** Define branch, overlay, and environment
   value selection without ambiguity.
 
 ## P3 - optional extensions

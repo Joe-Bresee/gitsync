@@ -54,6 +54,28 @@ data:
 	}
 }
 
+func TestRenderTemplateExposesEnvironmentData(t *testing.T) {
+	rendered, err := RenderTemplate(`environment: {{ printf "%q" .Environment.Name }}
+	branch: {{ printf "%q" .Environment.Branch }}
+	overlay: {{ printf "%q" .Environment.Overlay }}
+	region: {{ printf "%q" .Environment.Data.region }}`, Data{
+		Environment: EnvironmentData{
+			Name:    "production",
+			Branch:  "release",
+			Overlay: "overlays/production",
+			Data:    map[string]string{"region": "us-east"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`environment: "production"`, `branch: "release"`, `overlay: "overlays/production"`, `region: "us-east"`} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("rendered template does not contain %q:\n%s", want, rendered)
+		}
+	}
+}
+
 func TestRenderTemplateRejectsMissingMapKey(t *testing.T) {
 	_, err := RenderTemplate("value: {{ .Data.missing }}", Data{
 		Data:   map[string]string{},
