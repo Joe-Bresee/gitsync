@@ -217,6 +217,42 @@ Environment template input is available as `.Environment.Name`,
 Environment data is merged into `.Data` and `.Values`; environment values
 override same-named template values.
 
+## SOPS decryption
+
+Set `spec.encryptedConfig.provider` to `sops` to decrypt YAML source files
+before transforms, template rendering, or manifest apply:
+
+```yaml
+spec:
+  encryptedConfig:
+    provider: sops
+    binary: sops # optional
+    keySecretRef:
+      namespace: default
+      name: sops-keys
+    env:
+      SOPS_AGE_KEY: age-key
+    files:
+      GOOGLE_APPLICATION_CREDENTIALS: google-credentials.json
+```
+
+The operator reads the referenced Secret for each reconciliation. Every Secret
+data key is only copied when selected by `env` or `files`; `env` maps an
+environment variable name to a Secret key, and `files` maps an environment
+variable to a Secret key whose value is written as a temporary `0600` file.
+For existing resources with no explicit mappings, common provider conventions
+are mapped conservatively:
+
+- `GOOGLE_APPLICATION_CREDENTIALS`, `google_application_credentials`,
+  `service-account.json`, or `credentials.json`
+- `AWS_SHARED_CREDENTIALS_FILE` or `aws_shared_credentials`
+- `AWS_CONFIG_FILE` or `aws_config`
+- `SOPS_AGE_KEY_FILE`, `age_key_file`, `age-key.txt`, `age.key`, or `age_key.txt`
+
+Secret values are held only for the reconciliation process and temporary
+credential files are deleted after SOPS exits. Changes to the key Secret trigger
+reconciliation.
+
 ## Known Issues & Limitations
 
 1. **Testing Infrastructure**: Tests require envtest binaries that aren't currently installed. Run `make setup-envtest` to install them.

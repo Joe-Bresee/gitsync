@@ -67,7 +67,8 @@ optional features.
 
 ## Next milestone
 
-complete/check completion of deterministic CI.
-think about aws support eks/ google kuberenets: google $300 credit!
-docs page? explaining product like a true OS proj?
-live testing and analyses of project against a website w/ simulated traffic, downs, rollbacks, etc? grafana/prom?
+- [ ] complete/check completion of deterministic CI.
+- [ ] think about aws support eks/ google kuberenets: google $300 credit!
+- [ ] docs page? explaining product like a true OS proj?
+- [ ] live testing and analyses of project against a website w/ simulated traffic, downs, rollbacks, etc? grafana/prom? Video and write-up on it?
+- [ ] think of other things that would make this look like a legit OS project.

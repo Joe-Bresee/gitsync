@@ -140,6 +140,16 @@ type EncryptedConfigSpec struct {
 	// Binary is an optional sops executable name or absolute path.
 	// +optional
 	Binary string `json:"binary,omitempty"`
+
+	// Env maps SOPS environment variable names to keys in KeySecretRef.
+	// Values are passed only to the SOPS subprocess.
+	// +optional
+	Env map[string]string `json:"env,omitempty"`
+
+	// Files maps SOPS environment variable names to Secret keys whose values
+	// should be written to secure temporary files before decryption.
+	// +optional
+	Files map[string]string `json:"files,omitempty"`
 }
 
 // WebhookSpec configures authenticated Git push reconciliation.

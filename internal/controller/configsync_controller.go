@@ -151,7 +151,25 @@ func (r *ConfigSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	transformedPath := sourcePath
 	cleanupTransformed := func() {}
-	decryptedPath, cleanupDecrypted, err := encrypted.DecryptSource(sourcePath, configSync.Spec.EncryptedConfig)
+	var keySecretData map[string][]byte
+	if configSync.Spec.EncryptedConfig != nil && configSync.Spec.EncryptedConfig.KeySecretRef != nil {
+		keySecretRef := configSync.Spec.EncryptedConfig.KeySecretRef
+		keySecretNamespace := keySecretRef.Namespace
+		if keySecretNamespace == "" {
+			keySecretNamespace = configSync.Namespace
+		}
+		var keySecret corev1.Secret
+		if err := r.Get(ctx, types.NamespacedName{Namespace: keySecretNamespace, Name: keySecretRef.Name}, &keySecret); err != nil {
+			return r.handleFailure(ctx, &configSync, previousStatus, "EncryptedConfigFailed",
+				fmt.Errorf("failed to read SOPS key Secret %s/%s: %w", keySecretNamespace, keySecretRef.Name, err))
+		}
+		if len(keySecret.Data) == 0 {
+			return r.handleFailure(ctx, &configSync, previousStatus, "EncryptedConfigFailed",
+				fmt.Errorf("SOPS key Secret %s/%s contains no data", keySecretNamespace, keySecretRef.Name))
+		}
+		keySecretData = keySecret.Data
+	}
+	decryptedPath, cleanupDecrypted, err := encrypted.DecryptSource(sourcePath, configSync.Spec.EncryptedConfig, keySecretData)
 	if err != nil {
 		return r.handleFailure(ctx, &configSync, previousStatus, "EncryptedConfigFailed", err)
 	}
