@@ -67,7 +67,9 @@ optional features.
 
 ## Next milestone
 
-- [ ] complete/check completion of deterministic CI.
+- [x] Complete/check completion of deterministic CI: verify dependencies and
+  generated files, install pinned envtest assets, and pin E2E test tooling/images.
+- [ ] manual testing of new features
 - [ ] think about aws support eks/ google kuberenets: google $300 credit!
 - [ ] docs page? explaining product like a true OS proj?
 - [ ] live testing and analyses of project against a website w/ simulated traffic, downs, rollbacks, etc? grafana/prom? Video and write-up on it?
